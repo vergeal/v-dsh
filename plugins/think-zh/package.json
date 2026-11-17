@@ -1,0 +1,24 @@
+{
+  "name": "dsh-think-zh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Force Chinese thinking and a visible progress sentence on every model step.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
