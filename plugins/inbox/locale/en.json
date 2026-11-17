@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Inbox",
+    "description": "Adds an Inbox entry to the sidebar beside Plugins and Automation tasks. Nine simulated email, task, and IT ticket items each open their own detail page; no real source is connected yet."
+  }
+}
