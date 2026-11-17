@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Relay",
+    "description": "Cross-session messaging: list, read, create, fork, and archive Sessions, send messages to another Session, and play a paper-plane delivery effect in the Web GUI."
+  }
+}
