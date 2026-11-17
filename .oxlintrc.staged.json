@@ -9,6 +9,7 @@
     "**/node_modules/**",
     "**/.sessions/**",
     ".claude/**",
+    "plugins/**",
     "**/.doc-typecheck-*/**",
     "**/.node-next-types-*/**",
     "website/.generated/**",
