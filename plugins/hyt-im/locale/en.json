@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Hyt messages",
+    "description": "Read-only search over the local Hyt message store: list conversations, query messages by peer, time or keyword, search across conversations, and get send/receive statistics. The plugin has no write path; it never signs in, calls server APIs, or sends messages.",
+    "detail": "docs/DETAIL.md"
+  }
+}

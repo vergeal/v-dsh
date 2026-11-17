@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Hyt messages">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#1f3a5f"/>
+  <path d="M14 20a5 5 0 0 1 5-5h18a5 5 0 0 1 5 5v9a5 5 0 0 1-5 5H25l-7 6v-6h-4a0 0 0 0 1 0 0z" fill="#e8f0fb"/>
+  <path d="M14 20a5 5 0 0 1 5-5h18a5 5 0 0 1 5 5v9a5 5 0 0 1-5 5H25l-7 6v-6h-4a5 5 0 0 1-5-5z" fill="#e8f0fb"/>
+  <path d="M32 34h13a5 5 0 0 1 5 5v8a5 5 0 0 1-5 5h-1v5l-6-5H32a5 5 0 0 1-5-5v-3" fill="#7fb2f0"/>
+  <circle cx="21" cy="24.5" r="2.1" fill="#1f3a5f"/>
+  <circle cx="28" cy="24.5" r="2.1" fill="#1f3a5f"/>
+  <circle cx="35" cy="24.5" r="2.1" fill="#1f3a5f"/>
+</svg>
