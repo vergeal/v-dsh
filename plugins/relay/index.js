@@ -365,9 +365,9 @@ export function apply(ctx, config) {
         caller_session_id: caller.id,
         sessions: answer,
         returned: answer.length,
-        hint: answer.length === 0
-          ? 'No authorized Sessions matched. Other workspaces require allowCrossWorkspace, and the caller Session itself is excluded.'
-          : undefined,
+        ...(answer.length === 0
+          ? { hint: 'No authorized Sessions matched. Other workspaces require allowCrossWorkspace, and the caller Session itself is excluded.' }
+          : {}),
       }
     },
   }))
@@ -403,7 +403,7 @@ export function apply(ctx, config) {
         returned: page.length,
         total_messages: all.length,
         has_more: start > 0,
-        next_before_seq: start > 0 ? page[0]?.seq : undefined,
+        ...(start > 0 ? { next_before_seq: page[0]?.seq } : {}),
       }
     },
   }))
