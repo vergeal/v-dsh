@@ -1,0 +1,34 @@
+{
+  "name": "dsh-webwright",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright-driven browser tools for DeepSeek Harness: a dedicated browser, DOM element refs, and canvas surface coordinates.",
+  "exports": {
+    ".": "./index.js",
+    "./browser": "./browser.js"
+  },
+  "files": [
+    "index.js",
+    "browser.js",
+    "cordis.patch.yml",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0 <0.3.0"
+  },
+  "dependencies": {
+    "playwright-core": "^1.61.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
