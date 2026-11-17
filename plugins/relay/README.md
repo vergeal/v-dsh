@@ -43,7 +43,9 @@ The browser half reads successful `session_send` results from the current Sessio
 1. flies a paper plane with a fading light trail from the composer to the target Session row in the sidebar (1.5 s), then
 2. pulses the landing point and shows a short received badge on the row.
 
-If the target row is not in the sidebar, the plane lands at the sidebar edge. The effect needs the sender Session open in the same browser page; it does not synchronize across windows. `prefers-reduced-motion` reduces it to a short pulse. The effect depends on nothing in the Host: disabling `client.js` leaves delivery unchanged.
+If the target row is not in the sidebar, the plane lands at the sidebar edge. The effect needs the sender Session open in the same browser page; it does not synchronize across windows. `prefers-reduced-motion` reduces it to a short pulse. A successful call reaches the page as a `tool/result` event, or as `tool/ptc-dispatch` when the model called it inside `run_code`; both carry `meta.relay = 'send'` and start the flight, and a failed call starts none.
+
+The effect depends on nothing in the Host: disabling `client.js` leaves delivery unchanged.
 
 ## Configuration
 

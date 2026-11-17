@@ -19,6 +19,25 @@ window.__ModuleLoader__.load({
     /** Interval between two trail dots. */
     const DOT_INTERVAL_MS = 38
 
+    /**
+     * Event types that carry one tool call's presentation metadata: a direct call
+     * arrives as `tool/result`, a call nested inside `run_code` as `tool/ptc-dispatch`.
+     */
+    const RESULT_EVENT_TYPES = new Set(['tool/result', 'tool/ptc-dispatch'])
+
+    /**
+     * Delivery metadata of one successful `session_send`, or undefined for any other event.
+     * @param event - one event from the current Session window.
+     * @returns the send metadata with `target_session_id` and `message_id`, or undefined.
+     */
+    function sendResultMeta(event) {
+      if (!RESULT_EVENT_TYPES.has(event.type)) return undefined
+      const data = event.data
+      if (data === undefined || data.isError === true) return undefined
+      const meta = data.meta
+      return meta?.relay === 'send' ? meta : undefined
+    }
+
     /** Message channel between the watcher, the overlay, and row badges. */
     const listeners = new Set()
     function publish(event) {
@@ -77,20 +96,21 @@ window.__ModuleLoader__.load({
         const originRef = React.useRef(null)
         React.useEffect(() => {
           if (sessionId === undefined) return undefined
-          const session = ctx.sessions.get(sessionId)
+          const binding = ctx.sessions.binding(sessionId)
+          if (binding === undefined) return undefined
           const seen = new Set()
           let primed = false
           let disposed = false
           const scan = () => {
             if (disposed) return
-            const window = session.eventSource.getSnapshot()
+            const window = binding.eventSource.getSnapshot()
             for (const entry of window.entries) {
               if (entry.type !== 'event') continue
               const event = entry.event
               if (seen.has(event.seq)) continue
               seen.add(event.seq)
-              const meta = event.type === 'tool/result' ? event.data?.meta : undefined
-              if (meta === undefined || meta === null || meta.relay !== 'send') continue
+              const meta = sendResultMeta(event)
+              if (meta === undefined) continue
               if (!primed) continue
               publish({
                 kind: 'send',
@@ -102,7 +122,7 @@ window.__ModuleLoader__.load({
             }
             primed = true
           }
-          const stop = session.eventSource.subscribe(scan)
+          const stop = binding.eventSource.subscribe(scan)
           scan()
           return () => {
             disposed = true
