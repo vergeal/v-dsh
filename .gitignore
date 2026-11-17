@@ -50,8 +50,8 @@ worktrees/
 .typert-*/
 native/system/test/bin/
 
+.codegraph
+.dsh
+
 # Generated company-signed CUA release record.
 /packages/experimental/cua-macos/cua-helper.json
-
-# Local plugin development: outside the DSH workspace, build, lint, test, and release paths.
-/plugins/
