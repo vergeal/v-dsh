@@ -57,6 +57,7 @@ def parse_args(argv):
     parser.add_argument("--read-only", action="store_true",
                         help="只读模式：只允许查询语句，在只读事务内执行后回滚（无写入口）")
     parser.add_argument("--timeout", type=float, default=30.0, help="连接超时（秒），默认 30")
+    parser.add_argument("--max-rows", type=int, default=200, help="最多显示行数，默认 200")
     parser.add_argument("sql", nargs="*", help="SQL 字符串（未提供时读 stdin）")
     return parser.parse_args(argv)
 
@@ -333,7 +334,10 @@ def main(argv=None):
                 while True:
                     if cursor.description is not None:
                         headers = [d[0] for d in cursor.description]
-                        print(render_table(headers, cursor.fetchall()))
+                        rows = cursor.fetchmany(max(0, args.max_rows))
+                        print(render_table(headers, rows))
+                        if len(rows) == args.max_rows:
+                            print("注意：结果达到 --max-rows 上限，可能还有更多行。", file=sys.stderr)
                     else:
                         print("[%d] OK，影响 %d 行" % (idx, cursor.rowcount))
                     if not cursor.nextset():

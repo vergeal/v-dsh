@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DBRO",
-    "description": "只读查询达梦 8、MySQL 和 PostgreSQL：方言适配的表清单与表结构、数据源列表、Python 驱动自检，没有写开关。"
+    "description": "只读查询达梦 8、MySQL、PostgreSQL、Oracle、SQL Server、SQLite、Redis 和 Elasticsearch：按引擎适配的结构查看、只读语句执行、Redis 键读取与 Elasticsearch 索引查询，没有写开关。"
   }
 }

@@ -13,7 +13,7 @@ const ctx = {
   },
   tools: { register(tool) { tools.push(tool); return () => {} } },
 }
-const config = Config({ sources: ['biz=dm://SYSDBA@10.0.0.5:5236/BIZ'] })
+const config = Config({ sources: ['biz=dm://SYSDBA@10.0.0.5:5236/BIZ', 'app=sqlite:///D:/data/app.db', 'cache=redis://10.0.0.9/2', 'logs=es://readonly@10.0.0.10/logs-*?tls=1'] })
 
 apply(ctx, config)
 
@@ -22,7 +22,12 @@ console.log('config:', JSON.stringify(config))
 console.log('registered tools:', tools.length)
 for (const tool of tools) console.log(' -', tool.name)
 
-const expected = ['dbro_sources', 'dbro_query', 'dbro_tables', 'dbro_columns', 'dbro_doctor']
+const expected = [
+  'dbro_sources', 'dbro_query', 'dbro_tables', 'dbro_columns',
+  'dbro_kv_command', 'dbro_kv_scan',
+  'dbro_search_query', 'dbro_search_indices', 'dbro_search_mapping', 'dbro_search_cluster',
+  'dbro_doctor',
+]
 if (tools.length !== expected.length) throw new Error(`expected ${expected.length} tools, got ${tools.length}`)
 for (const toolName of expected) {
   if (!tools.some((tool) => tool.name === toolName)) throw new Error('missing tool ' + toolName)

@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-只读数据库查询入口（达梦 8 / MySQL / PostgreSQL）。
+只读 SQL 查询入口（达梦 8 / MySQL / PostgreSQL / Oracle / SQL Server / SQLite）。
 
-查库一律走这里，不要直接调 dm8_exec.py / mysql_exec.py / pgsql_exec.py：
-那三个留了写入口，本脚本**没有任何写开关**。
+查库一律走这里，不要直接调 *_exec.py：那些执行器留了写入口，本脚本**没有任何写开关**。
+Redis 走 dbro_kv.py，Elasticsearch 走 dbro_search.py——它们不是 SQL，白名单不一样。
 
 三层防护：
 1. 白名单：只放行单条 select / show / desc / describe / explain；
 2. 语句体内禁止 select ... into、for update / for share / lock in share mode、
    nextval() / setval() 这类会改数据的写法；
-3. 底层执行器再开只读事务（MySQL `START TRANSACTION READ ONLY`、PG
-   `SET TRANSACTION READ ONLY`、达梦 `SET TRANSACTION READ ONLY`），
-   结束一律 rollback。即使白名单漏判，库也会拒绝写。
+3. 底层执行器再开只读保护（MySQL / PostgreSQL / 达梦 / Oracle 用只读事务，SQL Server
+   用 BEGIN TRAN + ROLLBACK，SQLite 用 `mode=ro` 打开文件），结束一律 rollback。
+   即使白名单漏判，库也会拒绝写。
 
 用法：
-    dbro.py dm    -e "select * from v$instance"
-    dbro.py mysql -d im -e "show tables" -H 10.199.10.15 -u readonly
-    dbro.py pg    -d choa -e "select 1" --timeout 10
+    dbro.py dm        -e "select * from v$instance"
+    dbro.py mysql     -d im -e "show tables" -H 10.199.10.15 -u readonly
+    dbro.py sqlite    -d /var/lib/app/app.db -e "select name from sqlite_master"
+    dbro.py oracle    -d ORCLPDB1 -e "select * from user_tables"
 
-连接信息优先命令行，其次环境变量（DM8_* / MYSQL_* / PG*），与三个执行器一致。
+连接信息优先命令行，其次环境变量（DM8_* / MYSQL_* / PG* / ORACLE_* / MSSQL_*），与执行器一致。
 口令不要写在命令行里，用环境变量或 --password-stdin。
 """
 
@@ -31,6 +32,14 @@ import sys
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent.parent
+
+SQL_DIALECTS = ("dm", "mysql", "pg", "oracle", "mssql", "sqlite")
+
+# 只有 SQLite 不带 host / port / user：它的 -d 是文件路径。
+FILE_DIALECTS = ("sqlite",)
+
+# 这几类要么没有可默认的库名，要么库名错了就连不上。
+DATABASE_REQUIRED = ("mysql", "oracle", "mssql", "sqlite")
 
 # 语句只允许以这些词开头（小写比较）
 ALLOWED_FIRST = ("select", "show", "desc", "describe", "explain")
@@ -99,31 +108,32 @@ def check(sql):
 
 def build(dialect, ns, sql):
     """拼出对应执行器命令。只传 --read-only，永不传 --force/--allow-write。"""
-    tool = {"dm": "dm8_exec.py", "mysql": "mysql_exec.py", "pg": "pgsql_exec.py"}[dialect]
+    tool = {"dm": "dm8_exec.py", "mysql": "mysql_exec.py", "pg": "pgsql_exec.py",
+            "oracle": "oracle_exec.py", "mssql": "mssql_exec.py",
+            "sqlite": "sqlite_exec.py"}[dialect]
     cmd = [sys.executable, str(TOOLS / tool), "-e", sql]
-    # pg 执行器默认只读，用 --allow-write 反向开启；另外两个要显式 --read-only。
+    # pg 执行器默认只读，用 --allow-write 反向开启；另外几个要显式 --read-only。
     if dialect != "pg":
         cmd.insert(2, "--read-only")
 
-    if dialect == "dm":
+    if dialect in FILE_DIALECTS:
+        # SQLite 只认文件路径，没有 host / port / user 可传。
+        cmd += ["-d", ns.database]
+    else:
+        if dialect in DATABASE_REQUIRED and not ns.database:
+            raise ValueError("%s 需要 -d 指定库名 / 服务名。" % dialect)
         cmd += ["-H", ns.host, "-P", str(ns.port), "-u", ns.user]
         if ns.database:
             cmd += ["-d", ns.database]
-    else:
-        if not ns.database:
-            raise ValueError("%s 需要 -d 指定库名。" % dialect)
-        cmd += ["-H", ns.host, "-P", str(ns.port), "-u", ns.user, "-d", ns.database]
 
-    cmd += ["--timeout", str(ns.timeout)]
-    if ns.max_rows and dialect == "pg":
-        cmd += ["--max-rows", str(ns.max_rows)]
+    cmd += ["--timeout", str(ns.timeout), "--max-rows", str(ns.max_rows)]
     return cmd
 
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
-        description="只读查询达梦 / MySQL / PostgreSQL 数据库（单条 select 类语句，无写开关）。")
-    parser.add_argument("dialect", choices=("dm", "mysql", "pg"), help="库类型")
+        description="只读查询 SQL 数据库（单条 select 类语句，无写开关）。")
+    parser.add_argument("dialect", choices=SQL_DIALECTS, help="库类型")
     parser.add_argument("-e", "--sql", help="SQL 字符串")
     parser.add_argument("-f", "--file", help="从文件读 SQL")
     parser.add_argument("-H", "--host")
@@ -132,10 +142,10 @@ def parse_args(argv):
     parser.add_argument("-p", "--password", help="不推荐：口令会留在 shell 历史")
     parser.add_argument("--password-stdin", action="store_true",
                         help="从标准输入读口令（推荐）")
-    parser.add_argument("-d", "--database", help="库名 / 达梦 schema")
+    parser.add_argument("-d", "--database", help="库名 / 服务名 / 达梦 schema / SQLite 文件路径")
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--max-rows", type=int, default=200,
-                        help="PostgreSQL 最多显示行数，默认 200")
+                        help="最多显示行数，默认 200")
     return parser.parse_args(argv)
 
 
@@ -146,24 +156,27 @@ DEFAULTS = {
               "password": ("MYSQL_PASSWORD", "")},
     "pg": {"host": "PGHOST", "port": ("PGPORT", 5432), "user": ("PGUSER", "postgres"),
            "password": ("PGPASSWORD", "")},
+    "oracle": {"host": "ORACLE_HOST", "port": ("ORACLE_PORT", 1521), "user": ("ORACLE_USER", "system"),
+               "password": ("ORACLE_PASSWORD", "")},
+    "mssql": {"host": "MSSQL_HOST", "port": ("MSSQL_PORT", 1433), "user": ("MSSQL_USER", "sa"),
+              "password": ("MSSQL_PASSWORD", "")},
+    # SQLite 打开的是文件，没有连接口令；mode=ro 就是它的只读保护。
+    "sqlite": {"host": None, "port": None, "user": None, "password": None},
 }
 
 
 def fill_defaults(ns):
     spec = DEFAULTS[ns.dialect]
     if not ns.host:
-        ns.host = os.environ.get(spec["host"], "127.0.0.1")
+        ns.host = os.environ.get(spec["host"], "127.0.0.1") if spec["host"] else ""
     if ns.port is None:
-        env, default = spec["port"]
-        ns.port = int(os.environ.get(env, default))
+        ns.port = int(os.environ.get(spec["port"][0], spec["port"][1])) if spec["port"] else 0
     if not ns.user:
-        env, default = spec["user"]
-        ns.user = os.environ.get(env, default)
+        ns.user = os.environ.get(spec["user"][0], spec["user"][1]) if spec["user"] else ""
     if ns.password_stdin:
         ns.password = sys.stdin.readline().rstrip("\n")
     elif ns.password is None:
-        env, default = spec["password"]
-        ns.password = os.environ.get(env, default)
+        ns.password = os.environ.get(spec["password"][0], spec["password"][1]) if spec["password"] else ""
     ns.timeout = min(max(ns.timeout, 1.0), MAX_TIMEOUT)
     return ns
 
@@ -191,8 +204,9 @@ def main(argv=None):
 
     # 口令走环境变量，不放在 argv 里（避免 ps / 进程列表泄露）。
     env = dict(os.environ)
-    env[{"dm": "DM8_PASSWORD", "mysql": "MYSQL_PASSWORD",
-         "pg": "PGPASSWORD"}[ns.dialect]] = ns.password or ""
+    password_spec = DEFAULTS[ns.dialect]["password"]
+    if password_spec:
+        env[password_spec[0]] = ns.password or ""
     proc = subprocess.run(cmd, env=env)
     return proc.returncode
 

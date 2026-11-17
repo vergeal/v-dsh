@@ -1,3 +1,8 @@
-pymysql>=1.0
-psycopg2-binary>=2.9
+# 每种驱动只影响它自己的引擎；缺哪个用 dbro_doctor 查。
+pymysql>=1.0            # MySQL
+psycopg2-binary>=2.9    # PostgreSQL
+oracledb>=2.0           # Oracle（thin 模式，不需要 Instant Client）
+pymssql>=2.2            # SQL Server（也可改装 pyodbc + ODBC Driver，执行器两者都认）
+redis>=5.0              # Redis
+# SQLite 用标准库 sqlite3，Elasticsearch 用标准库 urllib，都不需要装包
 # dmPython 由达梦安装目录 $DM_HOME/drivers/python 提供，或 pip install dmPython

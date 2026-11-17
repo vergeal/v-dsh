@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DBRO",
-    "description": "Read-only queries for 达梦 8, MySQL and PostgreSQL through one dialect-aware tool family, with table inspection, a source list, and a Python driver check."
+    "description": "Read-only queries for 达梦 8, MySQL, PostgreSQL, Oracle, SQL Server, SQLite, Redis and Elasticsearch through one engine-aware tool family, with structure inspection, a source list, and a Python driver check."
   }
 }

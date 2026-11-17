@@ -1,7 +1,7 @@
 /**
- * Run the bundled Python executors. `dbro.py` owns the read-only gate: it rejects multi-statement and write-shaped
- * SQL, then the executor opens a read-only transaction. This module never adds `--force` or a write switch, so the
- * plugin cannot widen that gate.
+ * Run the bundled Python gates and executors. Each gate owns its read-only admission: `dbro.py` for one SQL
+ * statement, `dbro_kv.py` for one whitelisted Redis command, `dbro_search.py` for one Elasticsearch operation. This
+ * module never adds `--force`, `--allow-write`, or a write method, so the plugin cannot widen those gates.
  * @module dbro/executor
  */
 
@@ -11,14 +11,14 @@ import { join } from 'node:path'
 import * as Dialects from './dialects.js'
 import { DBRO_ERRORS, DbroError } from './errors.js'
 
-/** Cap on rendered table text returned to the model; the 达梦 and MySQL executors have no row limit. */
+/** Cap on rendered output returned to the model; every gate also caps its own row count. */
 export const MAX_OUTPUT = 200_000
 
 /** Extra wall-clock time granted beyond the SQL timeout before the child is killed. */
 const KILL_GRACE_MS = 5_000
 
 /**
- * Resolve the directory holding `dbro.py` and the three executors. The bundle ships them under `python/`, and
+ * Resolve the directory holding the gates and executors. The bundle ships them under `python/`, and
  * `toolDirectory` is the explicit override for a relocated checkout.
  * @param {string} pluginRoot - the installed plugin directory.
  * @param {string} [configured] - explicit `toolDirectory` setting.
@@ -36,26 +36,39 @@ function scriptIn(directory) {
 
 /**
  * @param {string} directory - directory resolved by {@link locate}.
+ * @param {string} name - script file name.
+ * @returns {string} the candidate path, preferring the bundled `dbro/` subdirectory.
+ */
+function scriptNamed(directory, name) {
+  const nested = join(directory, 'dbro', name)
+  return existsSync(nested) ? nested : join(directory, name)
+}
+
+/**
+ * @param {string} directory - directory resolved by {@link locate}.
  * @returns {string|undefined} the `dbro.py` entry script.
  */
 export function scriptPath(directory) {
-  const script = scriptIn(directory)
+  const script = scriptNamed(directory, 'dbro.py')
   return existsSync(script) ? script : undefined
 }
 
 /**
  * @typedef {object} Run
- * @property {'dm'|'mysql'|'pg'} dialect - target engine.
- * @property {string} sql - the validated single read-only statement.
+ * @property {import('./dialects.js').Dialect} dialect - target engine.
+ * @property {string} gate - gate script to run, from {@link Dialects.GATE}.
+ * @property {string} input - payload on standard input: one SQL statement, one Redis command, or one JSON body.
+ * @property {string[]} [argv] - extra gate arguments, such as the Elasticsearch operation and index.
  * @property {string} python - Python interpreter.
  * @property {string} directory - directory resolved by {@link locate}.
  * @property {string} [host] - host override.
  * @property {number} [port] - port override.
  * @property {string} [user] - user override.
- * @property {string} [database] - database or schema override.
+ * @property {string} [database] - database, schema, file path, db index, or index pattern.
  * @property {number} timeout - statement timeout in seconds.
- * @property {number} maxRows - row cap for PostgreSQL.
+ * @property {number} maxRows - row cap for every executor.
  * @property {string} [password] - password passed through the executor's environment variable.
+ * @property {Record<string, string>} [options] - connection option variables, from {@link Sources.optionEnv}.
  * @property {AbortSignal} [signal] - caller cancellation.
  */
 
@@ -70,21 +83,26 @@ export function scriptPath(directory) {
  */
 
 /**
- * Execute one statement through `dbro.py`. SQL goes through stdin because argv has a platform size limit and a
- * 100k-character query with Chinese literals can exceed it.
- * @param {Run} input - connection, statement, and cancellation details.
+ * Run one read-only request through its gate. The payload goes through stdin because argv has a platform size limit
+ * and a 100k-character query with Chinese literals can exceed it.
+ * @param {Run} input - connection, payload, and cancellation details.
  * @returns {Promise<Outcome>} the child's streams and exit status.
  * @throws {DbroError} `DBRO_SCRIPTS_NOT_FOUND` or `DBRO_PYTHON_NOT_FOUND` when the launch cannot start.
  */
 export async function run(input) {
-  const script = scriptPath(input.directory)
-  if (!script) throw new DbroError(`找不到 dbro.py：${input.directory}。重新安装插件，或用 toolDirectory 指向脚本目录。`, DBRO_ERRORS.SCRIPTS_NOT_FOUND)
+  const script = scriptNamed(input.directory, input.gate)
+  if (!existsSync(script))
+    throw new DbroError(`找不到 ${input.gate}：${input.directory}。重新安装插件，或用 toolDirectory 指向脚本目录。`, DBRO_ERRORS.SCRIPTS_NOT_FOUND)
 
-  const env = { ...process.env }
-  if (input.password !== undefined) env[Dialects.PASSWORD_ENV[input.dialect]] = input.password
+  // Gates write Chinese diagnostics and, for some engines, Chinese row data. On Windows a child Python inherits the
+  // console code page (cp936 on a zh_CN host) and its output arrives as mojibake once decoded as UTF-8 here, so the
+  // interpreter is pinned to UTF-8 unless the caller already set it.
+  const env = { PYTHONIOENCODING: 'utf-8', ...process.env, ...(input.options ?? {}) }
+  const passwordEnv = Dialects.PASSWORD_ENV[input.dialect]
+  if (input.password !== undefined && passwordEnv) env[passwordEnv] = input.password
 
   const outcome = await capture(input.python, argumentsFor(script, input), {
-    input: input.sql,
+    input: input.input,
     timeoutMs: Math.max(1, input.timeout) * 1000 + KILL_GRACE_MS,
     signal: input.signal,
     env,
@@ -93,12 +111,27 @@ export async function run(input) {
   return outcome
 }
 
+/**
+ * Assemble the gate's command line. The three families differ: the SQL gate takes the dialect as a positional and a
+ * server address, the Redis gate takes only address flags, and the Elasticsearch gate takes an operation positional
+ * plus an index pattern, reading the request body from stdin.
+ * @param {string} script - gate script path.
+ * @param {Run} input - resolved target.
+ * @returns {string[]} interpreter arguments.
+ */
 function argumentsFor(script, input) {
-  const args = [script, input.dialect]
-  if (input.host) args.push('-H', input.host)
-  if (input.port !== undefined) args.push('-P', String(input.port))
-  if (input.user) args.push('-u', input.user)
-  if (input.database) args.push('-d', input.database)
+  const args = [script]
+  const family = Dialects.familyOf(input.dialect)
+  if (family === 'sql') args.push(input.dialect)
+  else args.push(...(input.argv ?? []))
+
+  const addressed = family !== 'sql' || !Dialects.FILE_DIALECTS.has(input.dialect)
+  if (addressed) {
+    if (input.host) args.push('-H', input.host)
+    if (input.port !== undefined && input.port > 0) args.push('-P', String(input.port))
+    if (input.user) args.push('-u', input.user)
+  }
+  if (input.database) args.push(family === 'search' ? '-i' : '-d', input.database)
   args.push('--timeout', String(input.timeout), '--max-rows', String(input.maxRows))
   return args
 }
@@ -107,7 +140,7 @@ function argumentsFor(script, input) {
  * @typedef {object} Probe
  * @property {string} python - the interpreter that was probed.
  * @property {string} [version] - first line of `python --version`.
- * @property {Record<string, boolean>} drivers - importability of pymysql, psycopg2, and dmPython.
+ * @property {Record<string, boolean>} drivers - importability of every driver named in {@link Dialects.DRIVER}.
  * @property {string} [error] - why the probe failed, when it did.
  */
 
@@ -119,9 +152,10 @@ function argumentsFor(script, input) {
  * @returns {Promise<Probe>} interpreter version and driver availability.
  */
 export async function probe(python, signal) {
+  const drivers = [...new Set(Object.values(Dialects.DRIVER))]
   const script = [
     'import importlib.util, json',
-    'print(json.dumps({name: importlib.util.find_spec(name) is not None for name in ["pymysql", "psycopg2", "dmPython"]}))',
+    'print(json.dumps({name: importlib.util.find_spec(name) is not None for name in %s}))' % JSON.stringify(drivers),
   ].join('\n')
 
   try {

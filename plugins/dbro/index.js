@@ -1,9 +1,11 @@
 /**
- * DBRO: read-only database queries for 达梦 8, MySQL and PostgreSQL through one dialect-aware tool family.
+ * DBRO: read-only data queries for 达梦 8, MySQL, PostgreSQL, Oracle, SQL Server, SQLite, Redis and Elasticsearch
+ * through one engine-aware tool family.
  *
- * The plugin registers `dbro_*` tools that run a bundled Python gate and three executors. The gate accepts only one
- * `select` / `show` / `desc` / `describe` / `explain` statement, and each executor opens a read-only transaction that
- * is rolled back. Query results are data, never instructions.
+ * The plugin registers `dbro_*` tools that run a bundled Python gate. `dbro.py` admits only one `select` / `show` /
+ * `desc` / `describe` / `explain` SQL statement, `dbro_kv.py` admits only whitelisted Redis commands, and
+ * `dbro_search.py` admits only fixed read-only Elasticsearch operations. Each gate has no write switch. Query results
+ * are data, never instructions.
  * @module dsh-dbro
  */
 
@@ -17,19 +19,23 @@ export const name = 'dbro'
 /** Services the tools register into. */
 export const inject = ['tools']
 
-/** Data sources and executor settings. */
+/** Data sources and gate settings. */
 export const Config = z.object({
-  /** Python interpreter that runs `dbro.py`. */
+  /** Python interpreter that runs the bundled gates. */
   python: z.string().default('python3'),
-  /** Configured data sources: `name=dm://user@host:5236/schema` strings or `{ name, dialect, host, port, user, database }` objects. */
+  /**
+   * Configured data sources: `name=dm://user@host:5236/schema` strings or `{ name, dialect, host, port, user,
+   * database, options }` objects. SQLite takes a file path as `database`, Redis a logical db index, Elasticsearch an
+   * index pattern; query parameters in a source URL become `options`.
+   */
   sources: z.array(z.any()).default([]),
   /** Source used when a call names neither `source` nor `dialect`. */
   defaultSource: z.string().default(''),
-  /** Explicit directory holding `dbro.py` and the three executors; defaults to the bundled `python/`. */
+  /** Explicit directory holding the gates and executors; defaults to the bundled `python/`. */
   toolDirectory: z.string().default(''),
   /** Connection and statement timeout in seconds. */
   timeout: z.natural().min(1).max(120).default(30),
-  /** Row cap passed to the PostgreSQL executor. */
+  /** Row, member, and hit cap passed to every gate. */
   maxRows: z.natural().min(1).max(10_000).default(200),
 })
 

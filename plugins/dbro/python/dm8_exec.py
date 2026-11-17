@@ -73,6 +73,7 @@ def parse_args(argv):
                         help="只读模式：只允许查询语句，在只读事务内执行后回滚（无写入口）")
     parser.add_argument("--timeout", type=float, default=30.0,
                         help="连接超时（秒），默认 30；旧版驱动不认该参数时传 0 跳过")
+    parser.add_argument("--max-rows", type=int, default=200, help="最多显示行数，默认 200")
     parser.add_argument("sql", nargs="*", help="SQL 字符串（未提供时读 stdin）")
     return parser.parse_args(argv)
 
@@ -317,11 +318,14 @@ def connect(args):
     return dmPython.connect(**kwargs)
 
 
-def print_result(cursor, index):
-    """打印一条语句的结果集或影响行数。"""
+def print_result(cursor, index, max_rows=0):
+    """打印一条语句的结果集或影响行数；`max_rows` 为 0 时不限制。"""
     if cursor.description is not None:
         headers = [d[0] for d in cursor.description]
-        print(render_table(headers, cursor.fetchall()))
+        rows = cursor.fetchall() if max_rows <= 0 else cursor.fetchmany(max_rows)
+        print(render_table(headers, rows))
+        if max_rows > 0 and len(rows) == max_rows:
+            print("注意：结果达到 --max-rows 上限，可能还有更多行。", file=sys.stderr)
     else:
         print("[%d] OK，影响 %d 行" % (index, cursor.rowcount))
 
@@ -388,7 +392,7 @@ def main(argv=None):
                 print("[%d] 执行失败：%s" % (idx, exc), file=sys.stderr)
                 print("语句：%s" % " ".join(stmt.split()), file=sys.stderr)
                 return 1
-            print_result(cursor, idx)
+            print_result(cursor, idx, args.max_rows)
     except Exception as exc:
         print("执行失败：%s" % exc, file=sys.stderr)
         return 1
