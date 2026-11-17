@@ -526,6 +526,7 @@
       name: '@deepseek-ai/dsh-system-prompt'
       config:
         personaPrefix: ''
+        personaSuffix: 'The user prefers you to think in Chinese.'
 
     # Agents created at startup. The base stays empty; raw overlays may create
     # agents, while Web creates sessions on client request.
