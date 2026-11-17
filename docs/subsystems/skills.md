@@ -173,15 +173,17 @@ interface SkillDefinition extends SkillSummary {
 }
 ```
 
-Runtime skill inputs may omit invocation controls and the provider label. The registry resolves both defaults once, then uses the same complete definition shape and first-wins collection order as providers. The returned disposer removes the contribution and invalidates discovery caches.
+Runtime skill inputs may omit invocation controls, the provider label, and the origin bucket. The registry resolves those defaults once, then uses the same complete definition shape and first-wins collection order as providers. The returned disposer removes the contribution and invalidates discovery caches.
 
 ```ts type-equiv
 /** Runtime skill contribution accepted by `ctx.skills.register()`. */
-type SkillRegistration = Omit<SkillDefinition, 'invocation' | 'provider'> & {
+type SkillRegistration = Omit<SkillDefinition, 'invocation' | 'provider' | 'source'> & {
   /** Invocation controls; omission permits both model and user surfaces. */
   readonly invocation?: SkillInvocationPolicy
   /** Provider label; omission uses the registry-owned runtime provider. */
   readonly provider?: string
+  /** Origin bucket; omission uses the runtime bucket, which is where an injected skill comes from. */
+  readonly source?: SkillSource
 }
 ```
 

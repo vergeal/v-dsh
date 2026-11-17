@@ -25,6 +25,8 @@ const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const DEFAULT_COLLECT_CACHE_ENTRIES = 128
 const MAX_COLLECT_ATTEMPTS = 2
 const RUNTIME_PROVIDER = 'runtime'
+/** Origin bucket for registry-injected skills; the registry is their only provider. */
+const RUNTIME_SOURCE: SkillSource = RUNTIME_PROVIDER
 const RUNTIME_RANK = 250
 
 /** Standard precedence rank for packaged skill providers and local bundled roots. */
@@ -95,11 +97,13 @@ export interface SkillDefinition extends SkillSummary {
 }
 
 /** Runtime skill contribution accepted by `ctx.skills.register()`. */
-export type SkillRegistration = Omit<SkillDefinition, 'invocation' | 'provider'> & {
+export type SkillRegistration = Omit<SkillDefinition, 'invocation' | 'provider' | 'source'> & {
   /** Invocation controls; omission permits both model and user surfaces. */
   readonly invocation?: SkillInvocationPolicy
   /** Provider label; omission uses the registry-owned runtime provider. */
   readonly provider?: string
+  /** Origin bucket; omission uses the runtime bucket, which is where an injected skill comes from. */
+  readonly source?: SkillSource
 }
 
 /** Caller context used for cwd-sensitive and abortable provider work. */
@@ -436,7 +440,7 @@ export class SkillRegistry extends Service {
    * entries, within one layer. Same-name runtime entries in one layer are
    * first-wins; a duplicate logs a warning and receives a no-op disposer so
    * it cannot remove the winner.
-   * @param skill - the skill definition input; omitted invocation and provider fields receive defaults.
+   * @param skill - the skill definition input; omitted invocation, provider, and source fields receive defaults.
    * @returns the exact Cordis effect disposer, preserving composite teardown order and invalidating caches.
    */
   register(skill: SkillRegistration): () => void {
@@ -451,6 +455,7 @@ export class SkillRegistry extends Service {
       ...skill,
       invocation: skill.invocation ?? { modelInvocable: true, userInvocable: true },
       provider: skill.provider ?? RUNTIME_PROVIDER,
+      source: skill.source ?? RUNTIME_SOURCE,
     }
     return this.layers.effect(
       this.ctx,

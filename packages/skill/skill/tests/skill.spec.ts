@@ -1045,6 +1045,19 @@ describe('SkillRegistry registry', () => {
     disposeFirst()
     expect(await ctx.skills.get('same-skill')).toBeUndefined()
   })
+
+  it('defaults both provider and source for a runtime skill that names neither', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    // A plain-JS plugin can omit `source`. The load path requires a string, so before
+    // the default existed the skill registered cleanly and then failed loading with
+    // SKILL_INVALID_DEFINITION — the failure surfaced far from the missing field.
+    const dispose = ctx.skills.register({ name: 'no-source', description: 'No source given', content: 'body.' })
+    const skill = await ctx.skills.get('no-source')
+    expect(skill?.source).toBe('runtime')
+    expect(skill?.provider).toBe('runtime')
+    dispose()
+  })
 })
 
 describe('renderSkillContent', () => {
