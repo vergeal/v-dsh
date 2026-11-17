@@ -7,6 +7,8 @@
  */
 
 import { ToolArgsError, defineTool } from '@deepseek-ai/dsh-tools'
+import { createCursor } from './cursor.js'
+import { renderMessages } from './render.js'
 import * as Messages from './messages.js'
 import * as Store from './store.js'
 
@@ -47,33 +49,8 @@ const messageSchema = {
 }
 
 /**
- * 把消息列表渲染成紧凑文本：一行一条，正文压平。
- * @param {object} value - 工具返回值。
- * @returns {string} 渲染文本。
+ * 把消息列表渲染成紧凑文本的实现在 `src/render.js`：那边不依赖 harness，能脱离运行时单测。
  */
-function renderMessages(value) {
-  const lines = []
-  lines.push(`账号 ${value.account}（本人 ${value.self}）｜命中 ${value.count} 条`
-    + `${value.hasMore ? `，还有更多（最新 Id ${value.newestId}）` : ''}`)
-  if (value.messages.length === 0) {
-    lines.push('（无匹配消息）')
-    return lines.join('\n')
-  }
-  for (const m of value.messages) {
-    const arrow = m.direction === 'out' ? '→' : '←'
-    const body = m.content.replaceAll('\n', ' ').replaceAll('\r', ' ')
-    const clipped = m.contentTruncated ? '…' : ''
-    const extra = [
-      m.sessionType === 'group' ? '群' : '',
-      m.msgTypeName !== '文本' ? m.msgTypeName : '',
-      m.fileName ? `文件:${m.fileName}` : '',
-      m.webTitle ? `链接:${m.webTitle}` : '',
-      m.isSuccess !== 1 ? `发送状态:${m.isSuccess}` : '',
-    ].filter(Boolean).join(' ')
-    lines.push(`#${m.id} ${m.time} ${arrow} ${m.peerNick}(${m.peer})${extra ? ` [${extra}]` : ''}: ${body}${clipped}`)
-  }
-  return lines.join('\n')
-}
 
 /** 消息类工具的统一返回包装。 */
 function messagePayload(result, account, self) {
@@ -116,6 +93,9 @@ function messageOutput(keywordField) {
  * @param {object} config - 校验后的插件配置。
  */
 export function register(ctx, config) {
+  /** 增量游标，`hyt_new` 用。归属本 fiber：重载插件就重新立基线。 */
+  const cursor = createCursor()
+
   /**
    * 在选定账号库上跑一次只读查询，统一处理「库不可用」这类环境错误。
    * @template T
@@ -124,8 +104,10 @@ export function register(ctx, config) {
    */
   const run = fn => Store.withAccountDb(config, (db, account) => {
     const self = account.account
-    const contacts = Store.loadContacts(config, account)
-    return fn(db, account, self, contacts)
+    // 账号昵称来自通讯录，群名来自消息库的 keepgroup：群号不在 Person 表里，两张表
+    // 合成一张显示名表用，键空间（cs… 与 g8…）不冲突。
+    const names = new Map([...Store.loadContacts(config, account), ...Store.loadGroupNames(config, account)])
+    return fn(db, account, self, names)
   })
 
   ctx.tools.register(defineTool({
@@ -255,6 +237,7 @@ export function register(ctx, config) {
     description: '查虹云通本地消息库里的消息，支持按会话、对方账号、时间区间、收发方向、消息类型过滤，默认按 Id 倒序返回最新的。增量拉取用 afterId + order=asc。只读，不会改动客户端数据。',
     parameters: {
       session: { type: 'string', description: '会话 ID：单聊是对方账号（cs…），群聊是群号（g8…）。' },
+      exclude: { type: 'array', items: { type: 'string' }, description: '按会话 ID 排除，用于剔掉通知号 `hyt_kfpt_16823633` 这类高噪声会话。' },
       peer: { type: 'string', description: '按对方账号过滤，单聊里对方可能是发送方也可能是接收方，两边都匹配。' },
       from: { type: 'string', description: `时间下界。${TIME_HINT}` },
       to: { type: 'string', description: `时间上界。${TIME_HINT}` },
@@ -270,6 +253,7 @@ export function register(ctx, config) {
       if (args.limit !== undefined && args.limit < 1) throw new ToolArgsError(['limit 必须大于 0'])
       return run((db, account, self, contacts) => messagePayload(Messages.queryMessages(db, self, {
         session: args.session,
+        exclude: args.exclude,
         peer: args.peer,
         from: args.from,
         to: args.to,
@@ -292,6 +276,7 @@ export function register(ctx, config) {
       to: { type: 'string', description: `时间上界。${TIME_HINT}` },
       direction: { type: 'string', enum: ['in', 'out'], description: '限定收发方向。' },
       session: { type: 'string', description: '限定单个会话。' },
+      exclude: { type: 'array', items: { type: 'string' }, description: '按会话 ID 排除，用于把通知号从检索结果里剔掉。' },
       limit: { type: 'integer', description: '返回条数上限，默认取插件配置。' },
     },
     output: messageOutput(true),
@@ -304,6 +289,7 @@ export function register(ctx, config) {
         to: args.to,
         direction: args.direction,
         session: args.session,
+        exclude: args.exclude,
         limit: Math.min(args.limit ?? config.maxRows, config.maxRows),
       }, config.contentLimit, contacts), account, self))
     },
@@ -414,5 +400,82 @@ export function register(ctx, config) {
       dbPath: account.dbPath,
       ...Messages.overview(db),
     })),
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'hyt_new',
+    description: '取上次调用之后新到达的消息，并把插件内的增量游标推进到这批的最后一条。第一次调用只以当前库水位立基线、返回空，之后就是「盯接下来来的」。游标不持久化，进程重启后回到未初始化：用 set 显式接续位置，用 reset 丢弃积压，用 peek 只看不动游标。',
+    parameters: {
+      limit: { type: 'integer', description: '本次最多取多少条，默认取插件配置。积压超过它时 hasMore 为真，再调一次接着拿。' },
+      session: { type: 'string', description: '只看某一个会话的增量。' },
+      exclude: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '按会话 ID 排除。通知号 hyt_kfpt_16823633 一个会话就占全库三分之一，盯真人对话时通常排掉。',
+      },
+      peek: { type: 'boolean', description: '只看不推进游标，默认 false。' },
+      set: { type: 'integer', description: '把游标显式设到这个 Id 再取增量：用于重启后接续上次读到的位置，或回看重读。' },
+      reset: { type: 'boolean', description: '把游标重置到当前库水位并返回空，丢弃积压。与 set 互斥。' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          account: { type: 'string', required: true },
+          self: { type: 'string', required: true },
+          cursorBefore: { type: 'integer', required: true },
+          cursorAfter: { type: 'integer', required: true },
+          firstRun: { type: 'boolean', required: true },
+          messages: { type: 'array', required: true, items: messageSchema },
+          count: { type: 'integer', required: true },
+          hasMore: { type: 'boolean', required: true },
+          oldestId: { type: 'integer', required: true },
+          newestId: { type: 'integer', required: true },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.firstRun
+          ? `${value.account}｜首次调用：游标基线设在 Id ${value.cursorAfter}，之后的调用返回这个位置之后到达的消息`
+          : renderMessages(value),
+      }],
+    },
+    execute: async (args) => {
+      if (args.limit !== undefined && args.limit < 1) throw new ToolArgsError(['limit 必须大于 0'])
+      if (args.set !== undefined && args.reset) throw new ToolArgsError(['set 和 reset 不能同时给'])
+      if (args.set !== undefined && (!Number.isFinite(Number(args.set)) || Number(args.set) < 0)) {
+        throw new ToolArgsError(['set 必须是非负整数 Id'])
+      }
+      return run((db, account, self, names) => {
+        const maxId = Messages.overview(db).maxId
+        if (args.set !== undefined) cursor.set(args.set)
+        if (args.reset) cursor.set(maxId)
+        const firstRun = cursor.init(maxId)
+        const cursorBefore = cursor.value
+        const res = Messages.queryMessages(db, self, {
+          afterId: cursorBefore,
+          order: 'asc',
+          session: args.session,
+          exclude: args.exclude,
+          limit: Math.min(args.limit ?? config.maxRows, config.maxRows),
+        }, config.contentLimit, names)
+        // 查询成功才推进；空结果的 newestId 是 0，advance 本身也不会动游标，
+        // 但 peek 要显式留在原位，不能靠这个巧合。
+        if (args.peek !== true) cursor.advance(res.newestId)
+        return {
+          account: account.account,
+          self,
+          cursorBefore,
+          cursorAfter: cursor.value,
+          firstRun,
+          messages: res.messages,
+          count: res.count,
+          hasMore: res.hasMore,
+          oldestId: res.oldestId,
+          newestId: res.newestId,
+        }
+      })
+    },
   }))
 }

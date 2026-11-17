@@ -18,7 +18,9 @@ export const SKILL_NAME = 'dbro'
 export function registerSkill(skills, pluginRoot) {
   const file = join(pluginRoot, 'skills', SKILL_NAME, 'SKILL.md')
   const { name, description, body } = parseSkill(readFileSync(file, 'utf8'))
-  skills.register({ name, description, content: body })
+  // `source` is required: the registry passes it through to the load-path check, so
+  // omitting it registers fine but fails loading with SKILL_INVALID_DEFINITION.
+  skills.register({ name, description, content: body, source: 'runtime' })
 }
 
 function parseSkill(source) {

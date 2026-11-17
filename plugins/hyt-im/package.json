@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "虹云通本地消息能力：只读检索本机 CHFile 消息库，列出会话、查消息、搜索与统计，并向收件箱提供可消费的消息源。",
+  "description": "虹云通本地消息能力：只读检索本机 CHFile 消息库，列出会话、查消息、跨会话搜索与收发统计。",
   "license": "MIT",
   "exports": {
     ".": "./index.js",

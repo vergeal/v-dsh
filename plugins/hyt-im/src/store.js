@@ -125,6 +125,45 @@ export function addressBookPath(account) {
 }
 
 /**
+ * 把标识符包成 SQLite 双引号形式，内部双引号按 SQL 规则翻倍转义。
+ *
+ * 表名来自 `sqlite_master`，不是调用方输入，但仍要正确转义：含 `"` 的表名会让
+ * 拼出来的语句改变含义。
+ * @param {string} name - 表名或列名。
+ * @returns {string} 可嵌入 SQL 的带引号标识符。
+ */
+function quoteIdent(name) {
+  return `"${String(name).replaceAll('"', '""')}"`
+}
+
+/**
+ * 从消息库的 `keepgroup` 表读群号 → 群名。
+ *
+ * 通讯录 `Person` 里没有群号，所以群聊不读这张表就只能把 `g8…` 群号当名字显示。
+ * 本机 `keepgroup` 只覆盖一部分会话，读不到群名的仍回退成群号。
+ * @param {object} config - 插件配置。
+ * @param {{dir: string, dbPath: string}} account - 账号信息。
+ * @returns {Map<string, string>} 群号到群名。
+ */
+export function loadGroupNames(config, account) {
+  const map = new Map()
+  try {
+    withDb(account.dbPath, config.busyTimeoutMs, (db) => {
+      const present = db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'keepgroup'").get()
+      if (Number(present?.n ?? 0) === 0) return
+      for (const r of db.prepare('select GroupId as g, GroupName as n from keepgroup').all()) {
+        const group = r.g === null || r.g === undefined ? '' : String(r.g)
+        const name = r.n === null || r.n === undefined ? '' : String(r.n).trim()
+        if (group && name) map.set(group, name)
+      }
+    })
+  } catch {
+    // 群名是可选增强：表或列随客户端版本变化时退化成显示群号，不影响消息查询。
+  }
+  return map
+}
+
+/**
  * 读通讯录里的账号 → 昵称映射；库不存在或表结构不符时返回空表。
  * @param {object} config - 插件配置。
  * @param {{dir: string}} account - 账号信息。
@@ -139,12 +178,12 @@ export function loadContacts(config, account) {
       const tables = db.prepare("select name from sqlite_master where type='table'").all()
       // 通讯录表名随版本变化，挑第一个同时有账号列和昵称列的表。
       for (const { name } of tables) {
-        const cols = db.prepare(`pragma table_info(${JSON.stringify(name).replaceAll('"', '"')})`).all()
+        const cols = db.prepare(`pragma table_info(${quoteIdent(name)})`).all()
         const names = cols.map(c => String(c.name).toLowerCase())
         const acct = ['account', 'accid', 'userid', 'username'].find(k => names.includes(k))
         const nick = ['nickname', 'nick', 'remarkname', 'displayname', 'name'].find(k => names.includes(k))
         if (!acct || !nick || acct === nick) continue
-        const rows = db.prepare(`select "${acct}" as a, "${nick}" as n from "${name}"`).all()
+        const rows = db.prepare(`select ${quoteIdent(acct)} as a, ${quoteIdent(nick)} as n from ${quoteIdent(name)}`).all()
         for (const r of rows) {
           const a = r.a === null || r.a === undefined ? '' : String(r.a)
           const n = r.n === null || r.n === undefined ? '' : String(r.n)

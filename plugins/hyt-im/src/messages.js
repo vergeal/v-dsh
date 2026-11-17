@@ -52,9 +52,11 @@ export const MSG_TYPES = {
 /**
  * 消息类型名。
  * @param {number|null} t - MsgType。
- * @returns {string} 中文名，未知类型回退成 `未知(N)`。
+ * @returns {string} 中文名，未知类型回退成 `未知(N)`；空值回退成 `未知`。
  */
 export function msgTypeName(t) {
+  // 先挡空值：Number(null) 是 0，不挡就会把「没有类型」显示成「未知(0)」。
+  if (t === null || t === undefined || t === '') return '未知'
   const n = Number(t)
   if (!Number.isFinite(n)) return '未知'
   return MSG_TYPES[n] ?? `未知(${n})`
@@ -128,6 +130,9 @@ export function shapeMessage(row, self, contentLimit, contacts = new Map()) {
   const outgoing = sender === self
   const peer = outgoing ? receiver : sender
   const body = clip(row.Msg == null ? '' : String(row.Msg), contentLimit)
+  // 昵称兜底只在收消息时可用：SenderNick 是发送者的昵称，发出的消息里它就是本人
+  // 自己的名字，不能当成对方（receiver）的昵称。
+  const nickFromRow = outgoing ? '' : row.SenderNick == null ? '' : String(row.SenderNick)
   return {
     id: Number(row.Id),
     msgId: row.MsgId == null ? '' : String(row.MsgId),
@@ -137,7 +142,7 @@ export function shapeMessage(row, self, contentLimit, contacts = new Map()) {
     sender,
     receiver,
     peer,
-    peerNick: contacts.get(peer) || (row.SenderNick ? String(row.SenderNick) : '') || peer,
+    peerNick: contacts.get(peer) || nickFromRow || peer,
     msgType: Number(row.MsgType),
     msgTypeName: msgTypeName(row.MsgType),
     content: body.text,
@@ -169,6 +174,15 @@ function buildWhere(opts, self) {
   if (opts.session) {
     where.push('SessionId = ?')
     params.push(String(opts.session))
+  }
+  if (Array.isArray(opts.exclude)) {
+    // 按会话排除：通知号 `hyt_kfpt_*` 一个会话就占全库三分之一，做真人对话口径时要能剔掉。
+    // 值仍走占位符绑定，不拼进 SQL。
+    const list = opts.exclude.map(String).filter(Boolean)
+    if (list.length > 0) {
+      where.push(`SessionId not in (${list.map(() => '?').join(', ')})`)
+      params.push(...list)
+    }
   }
   if (opts.peer) {
     // 单聊里对方既可能是 Sender 也可能是 Receiver。
@@ -219,7 +233,7 @@ function buildWhere(opts, self) {
 export function queryMessages(db, self, opts, contentLimit, contacts = new Map()) {
   const limit = Math.max(1, Number(opts.limit) || 100)
   const { sql, params } = buildWhere(opts, self)
-  // 默认取最新的；升序（afterId 增量拉取）时也先按 Id 倒序取窗口，再翻回正序。
+  // 默认取最新的窗口；`order=asc` 配合 afterId 从旧往新消费增量，取的是窗口里最旧的 N 条。
   const ascending = opts.order === 'asc'
   const rows = db.prepare(
     `select ${COLUMNS} from chatmsg${sql} order by Id ${ascending ? 'asc' : 'desc'} limit ?`,
@@ -227,11 +241,15 @@ export function queryMessages(db, self, opts, contentLimit, contacts = new Map()
   const hasMore = rows.length > limit
   const kept = hasMore ? rows.slice(0, limit) : rows
   const messages = kept.map(r => shapeMessage(r, self, contentLimit, contacts))
+  const firstId = messages[0]?.id ?? 0
+  const lastId = messages[messages.length - 1]?.id ?? 0
   return {
     messages,
     count: messages.length,
-    oldestId: messages.length ? messages[0].id : 0,
-    newestId: messages.length ? messages[messages.length - 1].id : 0,
+    // Id 水位必须按排序方向取：倒序时首行才是最新一条，按位置写死会把两者颠倒，
+    // 调用方拿 newestId 当 afterId 就会重复拉取已经读过的消息。
+    oldestId: ascending ? firstId : lastId,
+    newestId: ascending ? lastId : firstId,
     hasMore,
   }
 }
@@ -304,9 +322,9 @@ export function listSessions(db, self, opts, contentLimit, contacts = new Map())
  * 全库检索正文，跨会话。
  * @param {import('node:sqlite').DatabaseSync} db - 只读连接。
  * @param {string} self - 本人账号。
- * @param {{keyword: string, from?: string|number, to?: string|number, limit?: number}} opts - 检索条件。
+ * @param {{keyword: string, from?: string|number, to?: string|number, limit?: number, direction?: string, session?: string, exclude?: string[]}} opts - 检索条件。
  * @param {number} contentLimit - 正文上限。
- * @param {Map<string,string>} [contacts] - 账号→昵称。
+ * @param {Map<string,string>} [contacts] - 账号到昵称，含群名。
  * @returns {{messages: object[], count: number, keyword: string}}
  */
 export function searchMessages(db, self, opts, contentLimit, contacts = new Map()) {
@@ -317,6 +335,7 @@ export function searchMessages(db, self, opts, contentLimit, contacts = new Map(
     limit: opts.limit,
     direction: opts.direction,
     session: opts.session,
+    exclude: opts.exclude,
   }, contentLimit, contacts)
   return { ...res, keyword: String(opts.keyword ?? '') }
 }
@@ -344,11 +363,12 @@ export function stats(db, self, opts) {
   const w = where.length ? ` where ${where.join(' and ')}` : ''
   const top = Math.max(1, Number(opts.topPeers) || 10)
 
+  // firstMs 要排除 CreatedTime=0 的脏值，否则全库统计时时间跨度的起点永远是空的。
   const total = db.prepare(`
     select count(*) as n,
            sum(case when Sender = ? then 1 else 0 end) as sent,
            sum(case when Sender <> ? then 1 else 0 end) as received,
-           min(cast(CreatedTime as integer)) as firstMs,
+           min(case when cast(CreatedTime as integer) > 0 then cast(CreatedTime as integer) end) as firstMs,
            max(cast(CreatedTime as integer)) as lastMs
     from chatmsg${w}
   `).get(self, self, ...params)

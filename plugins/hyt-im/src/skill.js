@@ -18,7 +18,9 @@ export const SKILL_NAME = 'hyt-im'
 export function registerSkill(skills, pluginRoot) {
   const file = join(pluginRoot, 'skills', SKILL_NAME, 'SKILL.md')
   const { name, description, body } = parseSkill(readFileSync(file, 'utf8'))
-  skills.register({ name, description, content: body })
+  // `source` 必填：注册表原样透传给加载路径校验，缺它会让技能注册成功但加载报
+  // SKILL_INVALID_DEFINITION。与 provider 的默认值 'runtime' 对齐。
+  skills.register({ name, description, content: body, source: 'runtime' })
 }
 
 function parseSkill(source) {

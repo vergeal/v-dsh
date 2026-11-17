@@ -1,260 +1,265 @@
 # hyt-im 插件 · 未完成事项与勘察记录
 
-> 更新时间：2026-11-17 18:55（Asia/Shanghai）。因关机中断，此文件是下次接续的唯一入口。
+> 更新时间：2026-11-17 23:30（Asia/Shanghai）。此文件是下次接续的入口。
 > 目标：把本机虹云通消息能力做成 DSH 插件，**收消息 + 发消息**，后续对接 `plugins/inbox`。
+
+## ⚠️ 本机是 Windows，不是 macOS
+
+本文此前所有勘察记录都出自一台 macOS 机器（`/Users/ekko/...`、`虹云通.app`、`DYLD_INSERT_LIBRARIES`）。
+**那套环境事实对当前机器不成立**，第二节已按 Windows 实测重写。具体作废项：
+
+- macOS 客户端 6.5.8 / x86_64 / 未签名 → 本机是 **6.5.63 / 32 位（PE32）/ Inno Setup 装在 `D:\app\长虹即时通讯\`**。
+- 「发消息只能走 dylib 注入」→ 本机有现成的官方 C-ABI SDK：`ECsdk.dll`，见第三节。
+- 「ChatSdk 排除的理由是 mac 版不存在」→ 理由错了但结论没错：本机也**不存在** ChatSdk，见第三节。
+- 第一节的「下次开工命令」原是 bash + mac 路径，已换成 PowerShell。
 
 ## 一、当前进度
 
 ### 已完成
 
-| 文件 | 状态 | 说明 |
-| --- | --- | --- |
-| `package.json` | ✅ | `dsh-hyt-im`，peerDependencies 对齐 dbro 约定 |
-| `cordis.patch.yml` | ✅ | `- insert: [{id: hyt-im, name: 'dsh-hyt-im', config: {}}]` |
-| `index.js` | ✅ | `name` / `inject:['tools']` / `Config` / `apply` |
-| `src/store.js` | ✅ | 账号发现 + 只读连接（`readOnly` + `pragma query_only`） |
-| `src/messages.js` | ✅ | MsgType 映射、时间解析、会话/消息/搜索/统计/概况 |
-| `src/tools.js` | ✅ | 6 个只读工具：`hyt_accounts` `hyt_sessions` `hyt_messages` `hyt_search` `hyt_stats` `hyt_overview` |
+| 文件 | 说明 |
+| --- | --- |
+| `package.json` | `dsh-hyt-im`，`engines.dsh` `>=0.2.0 <0.3.0`，peerDependencies 对齐 dbro |
+| `cordis.patch.yml` | `- insert: [{id: hyt-im, name: 'dsh-hyt-im', config: {}}]` |
+| `index.js` | `name` / `inject:['tools']` / `Config` / `apply` |
+| `src/store.js` | 账号发现 + 只读连接（`readOnly` + `pragma query_only`）+ 通讯录 + `loadGroupNames` |
+| `src/messages.js` | MsgType 映射、时间解析、会话/消息/搜索/统计/概况 |
+| `src/render.js` | 消息行文本呈现（从 `tools.js` 拆出，因为 tools 依赖 harness，纯渲染要能单测） |
+| `src/tools.js` | 7 个只读工具（含 `hyt_new` 增量消费） |
+| `src/cursor.js` | `hyt_new` 的游标状态机：立基线、只朝前推进、显式设位 |
+| `src/skill.js` | 随包技能注册 |
+| `skills/hyt-im/SKILL.md` | 技能正文 |
+| `README.md` / `docs/DETAIL.md` / `locale/{zh,en}.json` / `icon.svg` | 元数据与文档 |
+| `test/logic.test.mjs` | 27 例，`node --test` 直接跑，无需 harness 依赖 |
+| `test/register.mjs` | 装配检查 + 技能 `source` 回归锁 |
+
+插件已在本 profile 启用，`source` 是 **`file:D:\dev\projects\v-dsh\plugins\hyt-im`**（直指源目录，不是安装副本）。
+
+### 2026-11-17 修掉的缺陷
+
+全部有回归测试锁住：
+
+1. **随包技能加载失败**。`skills.register()` 少传 `source`，注册期不报错（`validateRuntimeSkill` 不查它），
+   加载期被 `validateDefinition` 拦下：`loaded skill "hyt-im" source must be a string`。
+   仓库里 44 处 `skills.register()` 调用全都传了 `source: 'runtime'`，只有本插件和 `dbro` 两个 JS 插件漏了——
+   **`dbro` 同时修了**，两边都补了断言。
+2. **`newestId`/`oldestId` 在默认倒序下含义颠倒**。原实现按数组首末位置取，倒序时首行是最新一条。
+   调用方拿 `newestId` 当下次 `afterId` 会重复拉取已读过的消息，工具渲染里那句「最新 Id …」也是错的。
+3. **`stats()` 的时间跨度起点显示成空**：`min(CreatedTime)` 把 `0` 脏值算进去了，改成 `min(case when > 0 ...)`。
+4. **收到的消息被标成「发送状态:0」**。`isSuccess` 只对本人发出的消息是发送结果，本机接收侧 11342 条都是 0。
+   渲染改为按 `direction === 'out'` 门控。
+5. **`msgTypeName(null)` 返回 `未知(0)`**：`Number(null)` 是 0，空值要先挡。
+6. **`loadContacts` 的标识符转义写错**：`JSON.stringify(name).replaceAll('"', '"')` 是自替换（原意是把 `"`
+   翻倍成 SQL 转义），表名含双引号时语句直接报错，被外层 `catch` 静默吞成空通讯录。换成 `quoteIdent()`。
+7. **发出的消息把本人自己的 `SenderNick` 当成对方昵称**：只在收消息时才可用 `SenderNick` 兜底。
+8. `messages.js` 里一句注释与实现不符（说升序会先倒序取窗再翻正序，实现是直接 `asc limit`）。
+9. `package.json` 的 `description` 宣称「向收件箱提供可消费的消息源」，而 inbox 对接根本没开始——已删掉这半句。
 
 ### 未完成（下次按此顺序做）
 
-1. **`src/skill.js` + `skills/hyt-im/SKILL.md`** — ⚠️ `index.js` 已 `import { registerSkill } from './src/skill.js'`，
-   **文件还不存在，现在装插件会加载失败**。要么补上（照抄 `plugins/dbro/src/skill.js`，31 行），
-   要么先把 `index.js` 里那两行注释掉。
-2. **`locale/zh.json` + `locale/en.json`** — Plugin Manager 标题与描述，键为 `meta.title` / `meta.description` / `meta.detail`。
-3. **`icon.svg`** — `package.json` 的 `exports` 已声明 `./icon`，缺文件会有元数据诊断。
-4. **`README.md` + `docs/DETAIL.md`** — `files` 已声明 `docs`，`meta.detail` 指向 `docs/DETAIL.md`。
-5. **发消息通道** — 见第三节，**尚未实现任何发送能力**。
-6. **新消息监听** — 轮询 `max(Id)`，增量拉取；`hyt_overview` 已经给了游标起点，但还没有监听器与事件推送。
-7. **inbox 对接** — 见第四节。
-8. **安装与验证** — 用 `plugin_manager` `install_bundle` + 绝对路径 `/Users/ekko/Projects/deepseek-harness/plugins/hyt-im`，
-   然后在新会话里调 `hyt_accounts` 验证。**尚未安装过，全部代码未经运行时验证。**
-9. **`test/logic.test.mjs`** — dbro 有这个约定，本插件还没写。
+1. **重启 host 才能生效的运行时验证**。第 2～7 项改的是 `src/*.js`，profile 虽直指源目录，但 **ESM 模块有进程内缓存**，
+   `plugin_manager` 的禁用/启用只重跑 `apply`、不会重读模块。`skill` 工具现在仍报 `source must be a string`，
+   就是这个原因。**下一步先重启 DSH host，再跑：`skill hyt-im` 应成功；`hyt_messages` 的 `newestId` 应指对；
+   `hyt_stats` 的「时间跨度」起点不该是 `?`；`hyt_sessions` 里被保留的群应显示群名。**
+2. **`hyt_new` 已实现**（游标在插件 fiber 内存里，`peek`/`set`/`reset` 三个改位入口，`exclude` 排高噪声会话）。
+   剩下的是**推送形态**：`ctx.timer` 轮询 `max(Id)` + 事件，或 `agent.followup()` 主动唤醒。用户已选择先不做，
+   理由是常驻 fiber 的生命周期成本和那个 5602 条的告警号会把人刷屏。真要做，先定形态再动手。
+   游标**不持久化**：host 重启后第一次调用重立基线，之前的积压不自动补；要接续得把上次的 `cursorAfter` 传给 `set`。
+3. **发消息**。见第三节，卡在一个 32 位 helper 和一套登录凭据上。
+4. **inbox 对接**。见第四节。
+5. `test/register.mjs` 需要能解析 `@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-tools` 才跑得动。
+   源码态跑不了（`dbro/test/logic.test.mjs` 同样跑不了，因为它 import 链上有 `@deepseek-ai/dsh-error`），
+   这是既有环境约束。技能 `source` 的断言已同时放进 `logic.test.mjs`，那里不需要 harness 依赖，能直接跑。
 
-### 未验证的风险点
+### harness 侧：source 兜底已做
 
-- `src/messages.js` 的 `stats()` 里按天聚合那句 SQL 用了 `${w ? \`${w} and\` : 'where'}` 拼接，
-  **没跑过**，where 为空/非空两种分支都要实测。
-- `Store.loadContacts()` 对 `AddressBookDB.db` 的表名和列名是**猜的**（用 `pragma table_info` 探测
-  account/nickname 类列名），没验证过真实表结构。读不到会静默退化成空表，不影响主流程。
-- `pragma table_info(...)` 那行的表名转义写法 `JSON.stringify(name).replaceAll('"','"')` 是无意义的自替换，
-  表名含特殊字符时会出问题；应改成白名单校验或反引号转义。
-- `node:sqlite` 在 Node 22.16 是**实验性**的，import 时打 ExperimentalWarning。插件里是否会被 DSH 当成错误，待验证。
+`packages/skill/skill/src/index.ts` 现在在 `register()` 里把 `source` 和 `provider` 一样兜底成 `'runtime'`，
+`SkillRegistration` 也把 `source` 降为可选。**根因是这两个平行值不对称**：`provider` 早就兜底了，
+`source` 却要调用方自己记得传，而 `validateRuntimeSkill` 不查它，于是 JS 插件漏传时注册静默通过、
+加载才在 `validateDefinition` 炸掉。兜底之后这条坑对所有 JS 插件都免疫了，`hyt-im` 和 `dbro` 显式传的
+`source: 'runtime'` 保持有效，不冲突。测试在 `packages/skill/skill/tests/skill.spec.ts`
+（两个字段都不传时加载出的 `source` 与 `provider` 都是 `'runtime'`）。
 
-## 二、已确认的环境事实（勘察结论，别重复查）
+还有一个排查陷阱留着：`register()` 遇到同名 runtime 技能会 warn 并忽略（`index.ts:451`）。
+改 `skill.js` 后如果重载路径没先 dispose 旧 fiber，旧定义会留着——看到
+`runtime skill "..." ignored because it is already registered` 就是这里。
+
+## 二、本机环境事实（Windows，2026-11-17 实测）
 
 ### 客户端
 
-- 路径 `/Applications/虹云通.app`，`CFBundleIdentifier = cloopen.rsdc`，可执行文件 `ChangHong`，版本 **6.5.8**。
-- **技术栈 Qt 5.12.3**，`Contents/Frameworks/` 下有 `libRX_Agent.1.dylib`、`libRX_BusinessView.1.dylib` 等。
-- **完全没有代码签名**（`codesign` 报 `code object is not signed at all`）→ 无 hardened runtime。
-- 架构 **x86_64**；本机 Intel i7-9750H，x86_64 原生，无 Rosetta 变量。
-- 进程名是 **`ChangHong`**（不是 yuntongxun/rongxin，`ps | grep hyt` 搜不到，踩过一次）。
-- 单实例机制：`QLocalServer` 监听名 `"RongXin"`，重复启动会把请求转发给已有实例后退出。
-- **没有任何 TCP 监听端口**（`lsof -nP -iTCP -sTCP:LISTEN -p <pid>` 为空）。
-  → 全局监听里也没有 9846 / 15800 / 15802。
-- 完整客户端源码在 `~/Projects/ChangHong/native/`（qmake 工程 `RongXin_XP.pro`），另有 `~/Projects/ChangHong/newhyt/native`。
-- ⚠️ 安装的 6.5.8 **比手上源码新**：二进制里有 `sig_sendTextMessageOnlyEX`（6 参），源码 `im_agent.h` 里没有。
-  凡涉及内部接口，**以二进制符号为准，源码只作参考**。
+- `D:\app\长虹即时通讯\ChangHong.exe`，**版本 6.5.63，32 位（machine=0x14c PE32）**，Qt 5 技术栈。
+  注册表 Uninstall 键 `{1D4809AE-...}_is1`，Inno Setup 安装。进程名 `ChangHong`。
+- 业务 DLL：`RX_Agent.dll`、`RX_BusinessView.dll`、`RX_MainUI.dll`、`RX_LoginUI.dll`、`RX_HttpClient.dll`、
+  `RX_PluginMgr.dll` 等，全部 32 位；另有 `ECsdk.dll`（见第三节）、`Ecmedia.dll`、`wbss.dll`、`VidyoClientDll.dll`。
+- 服务端：`chim.changhong.com`，`connector_port=8085`、`lvs_port=8888`、`file_port=8090`（`rxSettings_wai.ini`、
+  `sdk_server_config.xml`，`Environment=wai`）。
+- **进程零 LISTEN**。唯一外连是 `192.168.1.3:13556 → 221.182.19.202:8085`，另有 5 对本端双方都是自己的环回连接。
+  9846 / 15800 / 15802 三个端口在本机 TCP+UDP 全无监听。
 
 ### 消息库
 
-- 路径 `~/Documents/CHFile/<账号>/chatmsg.db`，本机有 `csT1002173`（本人罗添胜）、`csT1000735`、`cs80000008`。
-- **未加密**，普通 SQLite，`journal_mode=delete`（**不是 WAL**），19.8 MB，14178 行，`max(Id)=16401`（Id 有跳号但单调递增）。
-- 4 张表：`chatmsg`、`lastmsg`、`keepgroup`、`sqlite_sequence`。
-- `chatmsg` 关键字段：`Id`(自增PK) `MsgId`(UNIQUE) `MsgType` `Msg`(**明文**) `Sender` `Receiver`
-  `CreatedTime`(毫秒时间戳**字符串**，有 `0` 脏值) `SessionId` `SessionType` `SenderNick` `isSuccess` `Progress`
-  `ReadStatus` `FileName` `FileUrl` `webTitle` `webDesc` `webUrl` `ReplyFlag` `uuid` `ServiceId`。
-- **字段语义（实测）**：
-  - `SessionId`：单聊 = 对方账号（`cs…`），群聊 = 群 ID（`g8…`）。
-  - `SessionType`：0 = 单聊，1 = 群聊。`GroupId` 实际基本为空，**不要依赖**。
-  - 方向：`Sender == 本人账号` 即发出。本人账号 = CHFile 下的目录名（`csT1002173`）。
-  - `isSuccess`：1 成功、0 未完成、-2 失败。
-  - 通知号 `hyt_kfpt_16823633`，`MsgType=150`，7052 条占全库一半 —— **OA 登录验证码就在这里**
-    （`tools/INDEX.md` 记的「码在 chatmsg.db 的消息通知卡片里，不在短信」）。
-- ⚠️ **`lastmsg.UnReadCount` 不可用**：167 个会话总未读全是 0，客户端已读就清零。判断新消息只能靠 `Id` 游标。
+- 根目录 `C:\Users\Administrator\Documents\CHFile`，子目录 `Config / csT1002173 / HeadFiles / QtLogs / SdkLogs / tempImage / WbLogs`。
+  **只有一个账号目录 `csT1002173`**（本人罗添胜）。macOS 上另有 `csT1000735`、`cs80000008`，本机没有。
+- `csT1002173\chatmsg.db`：16,448 KB，15,318 行，`journal_mode=delete`，无 WAL/journal 侧文件。
+  4 张表：`chatmsg`(15318) `keepgroup`(30) `lastmsg`(187) `sqlite_sequence`；索引 `IdIndex/MsgIdIndex/MsgTypeIndex/SessionIdIndex/TimeIndex`。
+- `chatmsg` 真实 38 列：`Id, MsgType, MsgId, Msg, Sender, Receiver, CreatedTime, UserData, FileName, FileUrl,
+  SessionType, LocalTime, SessionId, SenderNick, HandleResult, ReadStatus, FileSize, Progress, GroupId,
+  FileFullPath, ChatType, offset, isAt, operationType, isSave, isSyncMsg, isReceiveOfflineMsg, webTitle,
+  webImagePath, webDesc, webUrl, originFileSize, isSuccess, uuid, ServiceId, ReplyFlag`。
+  - **`FileSize` 确实存在**（TEXT），`src/messages.js` 的 `COLUMNS` 里 19 列逐一核对全部存在。
+  - `CreatedTime` 是 `VARCHAR(33)`，所以 `cast(CreatedTime as integer)` 的写法必须保留。
+  - `CreatedTime = 0` 的脏行**本机 0 条**（macOS 记录里有）；防御逻辑照留。
+  - `isSuccess` 分布：`-2:1155 / 0:11342 / 1:2821`。0 占大头，说明未回填是常态。
+  - `GroupId` 基本为空，别依赖。
+- 通讯录 `AddressBookDB.db`：344 KB，表 `Department`(0 行) 与 `Person`(1314 行)。
+  `Person` 关键列 `Account VARCHAR(512) NOT NULL UNIQUE`、`Name`、`Remark`。
+  **`loadContacts()` 的猜测逻辑命中 `Person` + `Account`/`Name`**（候选列表顺序先撞 `sqlite_sequence.name`，
+  被「没有账号列」挡掉）。命中依赖 SQLite 标识符大小写不敏感。
+  - 昵称取的是真实姓名 `Name`；`Remark` 全表为空，所以 `Name` 已是最优解。
+  - **本人 `csT1002173` 不在 `Person` 里**，自己的名字解析不出来。
+- 群名在 `chatmsg.db.keepgroup(GroupId, GroupName)`，30 行，群名形如「刘程、罗添胜、田杰」（`GroupType=3` 的
+  成员拼接名）。`chatmsg` 里 `SessionType=1` 的 distinct 会话有 97 个，**覆盖率 30/97**；`Person` 里没有 `g8` 开头的行。
+- ⚠️ `lastmsg.UnReadCount` 依然不可用，判断新消息只能靠 `Id` 游标。
+- 通知号 `hyt_kfpt_16823633`（`MsgType=150`）5602 条，**OA 登录验证码在它的消息里**，不在短信。
 
-### 实测性能与陷阱
+### 性能与陷阱
 
-- 只读连接 `file:<path>?mode=ro` 或 `new DatabaseSync(path,{readOnly:true})`，两种都可用。
-- `select max(Id) from chatmsg` 开销 **0.58 ms**；单次写入 2.0 ms；外部只读**不阻塞**客户端写入。
-- ⚠️ **kqueue 是陷阱**：单次写入触发 **26.8 万次** VNODE 写事件（journal 文件反复创建删除）。
-  必须 debounce，实测不如 200–500 ms 轮询 `max(Id)` 简单可靠。
-- Node **v22.16.0**，内置 `node:sqlite` 可用（`DatabaseSync` / `StatementSync` / `constants` / `backup`）。
-  `better-sqlite3` 没装，也不需要。系统 `sqlite3` CLI 是 3.51.0。
+- 只读连接两种都验过可用：`file:<path>?mode=ro` 与 `new DatabaseSync(path, {readOnly:true})`。
+  本机**没有 sqlite3 CLI**，用 `node:sqlite`（Node v24.16.0，`node:sqlite` 已稳定）或 Python 3.13.1。
+- 外部只读连接不阻塞客户端写入；`select max(Id)` 亚毫秒。
+- ⚠️ macOS 上「kqueue 单次写入触发 26.8 万次 VNODE 事件」那个坑是 macOS 专属；
+  Windows 上监听文件变化应该用 `ReadDirectoryChangesW`，但**结论不变：直接轮询 `max(Id)` 更简单可靠**。
 
-## 三、发消息：路线已定，实现未开始
+## 三、发消息：Windows 上的可行入口是 ECsdk.dll
 
-**用户已选定路线 A**（dylib 注入调客户端内部接口），但后来改为「做成 DSH 插件」，
-注入那条路**已停止**，未写任何注入代码。下面是已经勘察到的、下次要用的事实。
+### 已排除（本机实测，别再试）
 
-### 已排除
+- **ChatSdk 9846 端口**：macOS 的排除理由是「只有 Windows 的 dll/lib，mac 版不存在」。**这台 Windows 上也没有**
+  ChatSdk：安装目录、`C:\Program Files(x86)`、`AppData`、`ProgramData`、整个 `D:\` 全盘按文件名搜
+  `ChatSdk|RX_Demo|libRX_` 命中 0；对安装目录所有 `.dll/.exe/.lib` 做内容级 ASCII 搜 `ChatSdk` 也是 0 命中。
+  真实结论是「ChatSdk 是融云 Demo 侧源码产物，客户端发行包不带」。9846 也再次确认无监听。
+- **`PluginConfig.ini` 的 15800/15802**：属**向日葵远程控制插件**，同目录有 `RemoteControl.exe`、`slsdk.dll`、
+  `SunFlower.ini`（`AppId=68348`），且都没监听。不是消息通道。
+- **任何本地 TCP/UDP 服务入口**：虹云通进程零 LISTEN，UDP 也没有。
+- **改本地库拦截发送**：本地库是事后账本，不是发送闸门（撤回必须调服务端 `POST /rx/openapi/messages/recall`）。
 
-- **ChatSdk 9846 端口：死的。** `RX_Demo/ChatMsgStub/ChatSdk/ChatSdk.h` 里有完整 API
-  （`connectServer("localhost", 9846)`、`SendTextMessageEX`、`sig_onReceiveTextMessage`），
-  但只有 Windows 的 `.dll/.lib`，`Bin_mac/` 里没有 mac 版；`libRX_Agent`/`libRX_MainUI`
-  二进制里各有一处 `9846` 字符串残留，**但搜不到任何 ChatSdk 类符号**，实测也没监听。
-- **`RX_PluginMgr` 的 UDP 通道**（`PluginConfig.ini` 里 `LocalPort=15800`、`SunFlower Port=15802`）
-  是给「向日葵远程监控」插件的（`Plugin_SunFlower=20000`，任务类型全是 CreateRemote/CreateClient），
-  **不是消息通道**，且实测没监听。
-- **`ProcessLintener`**（`RX_BusinessView/processlintener.cpp`）：`QLocalServer` 名 `"RongXin"`，
-  协议是 **Base64(JSON)**，有账号 MD5 校验，但 `processEvent` 只处理会议/登录事件
-  （`LoginStatusJoinConf` 等），**没有发消息分支**。要用得改源码重编译。
-- **改本地库来「拦截发送」不可能**：本地库是事后账本，不是发送闸门。证据是撤回必须调服务端
-  `POST /rx/openapi/messages/recall`。文本消息 INSERT→`isSuccess=1` 的窗口只有几十毫秒
-  （库里 `isSuccess<>1` 的文本消息都是发送失败残留，`Progress=0`），只有文件类消息窗口够大
-  （有 `Progress=5`/`19` 的上传中残留）。
+### 可用入口：`ECsdk.dll`（5.4.2.6，C-ABI，357 个未修饰导出）
 
-### 可用入口：`IM_Agent` 单例 + Qt 信号槽
+FileDescription 写 `IM、GROUP、VOIP、CONFERENCE、ALL`，**不依赖 Qt**，客户端自己就是用它登录发消息的
+（`SdkLogs` 里能看到 `ECSDK_Initialize set ini cfg path` / `InitDB` / `LoginEx2 jsonContent={"comId":723,...}` /
+`SetGeneralCallBackFuction`）。
 
-`RX_Agent/im_agent.h`，`class IM_Agent : public QObject`。**构造函数里 `moveToThread(AgentThreadMgr::getAgentThread())`**，
-且连接是 `connect(this, SIGNAL(sig_sendTextMessage(...)), this, SLOT(slot_sendTextMessage(...)))`（默认 AutoConnection）
-→ **从任意线程 emit 都会被 Qt 自动 QueuedConnection 投递到 Agent 线程执行**，跨线程安全；
-`qRegisterMetaType<Agent_MsgType>("Agent_MsgType")` 已注册，QString 是内置 metatype。
-
-源码注释明写「这些信号是提供上层业务发送请求的」，所以 **emit 信号就是官方调用方式**。
-
-`libRX_Agent.1.dylib` 导出的关键符号（mangled / 地址）：
+按用途分组的关键导出：
 
 ```
-__ZN8IM_Agent8instanceEv                                            0x110c0  IM_Agent::instance()
-__ZN8IM_Agent19sig_sendTextMessageE7QStringS0_13Agent_MsgTypeS0_     0xa0fd0  sig_sendTextMessage(QString,QString,Agent_MsgType,QString)
-__ZN8IM_Agent21sig_sendTextMessageEXE7QStringS0_13Agent_MsgTypeS0_S0_ 0xa1040 sig_sendTextMessageEX(...,+QString jsonString)
-__ZN8IM_Agent25sig_sendTextMessageOnlyEXE7QStringS0_13Agent_MsgTypeS0_S0_S0_ 0xa1130  源码里没有，6.5.8 新增
-__ZN8IM_Agent20sig_onReceiveMessageE11ChatMsgData                    0xa26f0  sig_onReceiveMessage(ChatMsgData)
-__ZN8IM_Agent24sig_onPreSendTextMessageEi11ChatMsgData                0xa2d10 sig_onPreSendTextMessage(int,ChatMsgData) ← 发送前拦截点
+INIT/LOGIN  ECSDK_Initialize, ECSDK_UnInitialize, Login, LoginEx, LoginEx2, Logout,
+            SetServerAddress(Ex), SetServerEnvType(Ex), EnableSecureTansport
+SEND        SendTextMessage, SendTextMessageEX, SendMediaMessage(EX), SendMCMMessage,
+            SendMcmMediaMessage, ConferenceSendCmd, SendCmdToRest, Start/StopRecordSendVoice
+CALLBACK    SetMessageCallBackFunction, SetGeneralCallBackFuction, SetVoIPCallBackFuction,
+            SetConfCallBackFuction, SetChatRoomCallBackFuction, MakeCallBack
+GROUP/MSG   CreateGroup(EX), JoinGroup, QueryGroupMember, WithDrawMessage(Ex),
+            WithDrawMessageGroup(Ex), DeleteMessage(Ex), ReadMessageGroup, DownloadFileMessage(EX)
 ```
 
-完整信号清单见 `im_agent.h`：发送类 `sig_sendTextMessage(EX)` / `sig_sendMediaMessageEX` /
-`sig_retryMediaMessageEX` / `sig_downloadFileMessage(Ex)` / `sig_deleteMessage` /
-`sig_withDrawMessage(msgId,chatId,sendId,type)` / `sig_withDrawMessageGroup` / `sig_setReadStatue` /
-`sig_setTopContact` + 全套群组操作；响应类 `sig_onReceiveMessage` / `sig_onReceiveOfflineMessage` /
-`sig_onReceiveFile` / `sig_onSendTextMessage(reason,msg)` / `sig_onSendMediaFile` /
-`sig_onDownloadFileComplete` / `sig_onWithDrawMessage` / `sig_onOfflineMessageCount`；
-拦截类 `sig_onPreSendTextMessage` / `sig_onPreSendMediaFile`。
+`RX_Agent.dll` 的 PE 导出表也确认 macOS 记录的那批 Qt 信号在 Windows 上同样导出（它 imports ECsdk.dll）：
+`?instance@IM_Agent@@SAPAV1@XZ`、`?sig_sendTextMessage@IM_Agent@@...`、`?sig_sendTextMessageOnlyEX@...`、
+`?sig_onPreSendTextMessage@...`。`RX_BusinessView.dll` 有 `?sendTextMessage@ChatMsgControl@@...`
+和 `?GetInstance@ProcessLintener@@` / `?processEvent@ProcessLintener@@`。**注入这条路技术上也通，
+但 ECsdk 是官方 SDK，合规性和跨版本稳定性都更好，优先它。**
 
-`ChatMsgControl`（`libRX_BusinessView.1.dylib`，导出 4607 符号）也有全套：
-`RX_BusinessView::instance()` → `getMsgCtrl()` → `sendTextMessage(ChatTextMsgViewData&)` /
-`sendPluginMessage(QString,QString,QString)` / `sendFileMessage` / `sendPicMessage` /
-`sendVoiceMessage` / `sendVideoMessage` / `sendShareUrlMessage` / `forwardMessage` /
-`replyMsg` / `withDrawMessage` / `deleteMessage` / `reSendMessage`。
-注意 `sendPluginMessage` 内部只是 `emit IM_Agent::instance()->sig_sendTextMessageEX(..., Agent_Msg_Type_Command, ...)`，
-**发的是命令消息（type 26）不是普通文本**，别拿它当发聊天消息用。
+### 四个前置条件（按难度排）
 
-`ChatTextMsgViewData`（`RX_DataDefine/ChatMsgData.h:134`，注释「仅供发送使用」）：
-`receiver` `msgContent` `isBurn` `isAt` `userdata` `listAtAccounts`。
+1. **必须 32 位进程**。全套模块 `machine=0x14c`，本机 Node 是 `x64 win32 v24.16.0`，直接 `LoadLibrary`
+   必然 `ERROR_BAD_EXE_FORMAT`。OS 是 AMD64（WOW64 可用），所以需要一个 **x86 helper 进程**（原生 32 位可执行
+   或 ia32 Node）承担发送，插件经 IPC 驱动它。这也是「DSH 插件（Node）不能自己直调」的硬理由。
+2. **登录凭据**。`LoginEx2` 收 JSON（日志可见 `comId/connectorId/mac`），凭据来自虹云通自身登录流程
+   （`ECsdk.dll` 内部不含 AppKey）。要么复用客户端已拿到的 token（候选存放处 `CHFile\login.db`、
+   `Config\ecsystem.db`），要么自己走一遍登录。**两条都越出「只读本机库」的边界，动手前要用户确认。**
+3. **与在跑的客户端会话冲突**。ECsdk 自己 `InitDB/SqlQuery`（本机 `Config\ecsystem.db`），同账号并发两个 SDK
+   会话是否互踢取决于服务端多端策略，**必须实测，不能假设安全**。
+4. **缺函数原型**。本机没有 `ECsdk.h` / `.lib`，357 个导出只能拿到名字，参数类型得靠逆向或向厂商要头文件。
+   「拿到 SDK 头文件」应列为第一优先前置条件。
 
-`Agent_MsgType`（`RX_DataDefine/AgentEnum.h:117`）：
-1 文本、2 语音、3 视频、4 图片、5 位置、6 文件(压缩)、7 文件(不压缩)、8 分享链接、9 群组通知、
-10 未接来电、11 群@、12 输入状态/透传、13 名片、15 大文件、17 第三方推送、20 服务器透传、
-21 删除/阅后即焚通知、22 匿名开关、24 已读通知、25 撤回、26 命令控制、30 SDK透传JSON、
-31 公众号、36 泛微OA、50 会议通知、60 位置共享、61 点赞。
+### 插件形态下的落法
 
-### ABI 注意事项（下次实现必读）
+`spawn` 一个 32 位 helper（承载 ECsdk），helper 与本插件走 IPC（stdio 或命名管道）；
+收消息继续走 SQLite 只读轮询，不依赖 helper。退路是 UIA/辅助功能操作窗口输入框（不碰内部符号，
+但需要客户端在前台且怕 UI 改版）。
 
-- `QString(const QChar*, int)` 导出为 `__ZN7QStringC1EPK5QChari`（0xa5810，在 QtCore）；
-  **没有** `QString::fromUtf8`、**没有** `QString::~QString()`（都是 inline）；
-  `QArrayData::deallocate(QArrayData*, size_t, size_t)` 导出为 `__ZN10QArrayData10deallocateEPS_mm`（0x300c0）。
-  → 纯 C 构造 QString 可行：UTF-8 转 UTF-16 后调 `QString(const QChar*, int)`，析构手工 deref + deallocate。
-- ⚠️ **QString 有非平凡析构，按 Itanium C++ ABI 是 non-POD，参数走隐藏指针而非寄存器**。
-  上次正在反汇编 `sig_sendTextMessage` 验证这一点时被中断。已拿到的反汇编开头：
-  ```
-  pushq %rbp / movq %rsp,%rbp / subq $0x40,%rsp
-  movl %ecx, -0x34(%rbp)     ← 第 4 个参数(Agent_MsgType)在 ecx，是寄存器传递
-  movq %rsi, -0x28(%rbp)     ← rsi
-  movq %rdx, -0x20(%rbp)     ← rdx
-  movq %r8,  -0x10(%rbp)     ← r8
-  ```
-  **初判：QString 是按值放在 rsi/rdx/r8 里传的（trivially relocatable 优化），不是隐藏指针**，
-  但这只是函数序言，还没看到 `QMetaObject::activate` 的调用点，**结论未确认，下次必须验完再写代码**。
-- macOS Qt 事件循环基于 CFRunLoop，`dispatch_async(dispatch_get_main_queue(), ...)` 可在主线程执行；
-  但既然 emit 信号天然走 QueuedConnection 到 Agent 线程，**不一定需要 GCD**。
-- 注入方式：客户端未签名，`DYLD_INSERT_LIBRARIES` 直接执行
-  `/Applications/虹云通.app/Contents/MacOS/ChangHong` 即可（注意 `open -a` **不传递** DYLD 环境变量）；
-  更干净的做法是用 `insert_dylib` 往主二进制写 `LC_LOAD_DYLIB`，之后双击图标自动加载。
-  SIP 当前是 **enabled**，但 SIP 不保护未签名的第三方 app。
-
-### 插件形态下怎么落发送
-
-DSH 插件跑在 Node 里，不能自己注入。可行拆法：
-
-- 插件内 `spawn` 一个外部启动器脚本，由它带 `DYLD_INSERT_LIBRARIES` 启动客户端；
-- 注入的 dylib 在客户端进程内开一个本地 Unix socket 当指令入口；
-- 插件通过该 socket 发「发消息」指令，收消息仍走 SQLite 轮询（不依赖注入）。
-- 退路：AppleScript / 辅助功能 API 操作窗口输入框（复用 `~/agents/tools/focusdesk`），
-  不碰内部符号、跨版本稳，但需要客户端在前台且脆弱于 UI 改版。
+`tools/chim-msg/chim_msg.py` 那套走服务端 `POST /rx/openapi/messages/recall` 的是**管理员接口，用户明确说不要管**。
 
 ## 四、inbox 对接（未开始）
 
 `plugins/inbox`（`dsh-inbox` 0.1.0）现状：
 
 - **Host 半边是空的**：`index.js` 只有 `export function apply() {}`，不注册任何 service / tool / 事件。
-- **Client 半边 1151 行**，`ITEMS` 是 9 条硬编码模拟数据（email 3 / todo 3 / ticket 3），
-  README 明写「No real source delivers items yet: no Host service, no persistence, no read state on the Host,
+- **Client 半边 1151 行**，`ITEMS` 是 9 条硬编码模拟数据（email 3 / todo 3 / ticket 3），README 明写
+  「No real source delivers items yet: no Host service, no persistence, no read state on the Host,
   and no badge on the sidebar entry」。
-- item 数据契约：`{ id, kind, unread, tone, status, title, source, time, ... }`，
-  `kind ∈ {email, todo, ticket}`，字典有 `KIND_LABELS`（第 645 行）和 `GLYPHS`（第 641 行），
-  状态文案在 locale 段（en 828 行起、zh 988 行起）：`status.reply` `status.confirm` `status.none`
-  `status.doing` `status.todo` `status.done` `status.processing` `status.pending` `status.approval`。
-- `tone` 取值见到 `warn` `active` `idle` `done`。
-- 读状态是组件内 state，面板卸载或刷新就重置，**没有持久化**。
+- item 契约：`{ id, kind, unread, tone, status, title, source, time, ... }`，`kind ∈ {email, todo, ticket}`，
+  字典有 `KIND_LABELS`（第 645 行）和 `GLYPHS`（第 641 行），状态文案在 locale 段（en 828 起、zh 988 起）。
+  `tone` 取值见到 `warn` `active` `idle` `done`。
+- 读状态是组件内 state，面板卸载或刷新就重置，没有持久化。
 
-对接要做的：hyt-im 的 Host 侧注册一个可被消费的 Service（会话/未读/消息列表 + 新消息订阅），
-inbox 的 Client 增加 `kind: 'im'`，把 `ITEMS` 换成从 Host 服务拉取，并补 `KIND_LABELS`/`GLYPHS`/locale。
-Client 侧访问 Host 服务的机制（typert / api gateway）**还没查**，下次要先确认再动手。
+要做：hyt-im 的 Host 侧注册一个可被消费的 Service（会话/未读/消息列表 + 新消息订阅），inbox 的 Client 加
+`kind: 'im'`，把 `ITEMS` 换成从 Host 服务拉取，并补 `KIND_LABELS`/`GLYPHS`/locale。
+**Client 侧访问 Host 服务的机制（typert / api gateway）还没查，动手前先确认。**
 
 ## 五、DSH 插件写法速查（本仓库约定）
 
-参照 `plugins/dbro`（结构最接近）：
+参照 `plugins/dbro`（结构最接近，且这两个插件的 `src/skill.js` 是同一份模板）：
 
 - `package.json`：`dsh.bundle.patch` 指向 `cordis.patch.yml`；`exports` 要有 `.` / `./locale/*.json` / `./icon`；
-  `files` 必须列全（`index.js` `src` `skills` `locale/*.json` `docs` `icon.svg` `cordis.patch.yml` `README.md`）；
-  `engines.dsh` 用 `">=0.2.0 <0.3.0"`；依赖走 `peerDependencies`（`@deepseek-ai/cordis`、`dsh-tools`、
-  `schemastery`、`dsh-error`、需要凭据再加 `dsh-credentials`），**不装 node_modules**，从 dsh 安装处解析。
+  `files` 必须列全；`engines.dsh` 用 `">=0.2.0 <0.3.0"`；依赖走 `peerDependencies`，**不装 node_modules**，
+  从 dsh 安装处解析。
 - `cordis.patch.yml`：`- insert:\n    - id: <row-id>\n      name: '<包名>'\n      config: {}`。
-- `index.js`：`export const name` / `export const inject = ['tools']` /
-  `export const Config = z.object({...})`（`import z from '@deepseek-ai/schemastery'`，
-  可用 `z.string().default()`、`z.natural().min().max().default()`、`z.array(z.any())`）/
-  `export function apply(ctx, config)`。可选服务用 `ctx.get('skills', false)` 取，**不要用 inject 硬依赖**。
+- `index.js`：`export const name` / `export const inject = ['tools']` / `export const Config = z.object({...})` /
+  `export function apply(ctx, config)`。可选服务用 `ctx.get('skills', false)` 取，不要用 inject 硬依赖。
   插件根目录用 `import.meta.dirname`。
 - 工具：`import { defineTool, ToolArgsError } from '@deepseek-ai/dsh-tools'`，
   `ctx.tools.register(defineTool({ name, description, parameters, output:{schema, render}, execute }))`。
-  参数 `type` 可用 `string` `number` `integer` `boolean` `null` `array` `object` `json`，
-  配 `required` `description` `enum` `items` `properties` `additionalProperties`。
+  参数 `type` 可用 `string` `number` `integer` `boolean` `null` `array` `object` `json`。
   `output.render(args, value)` 返回 `[{ type:'text', text }]`。
   定义见 `packages/core/tools/src/schema.ts:555`，实例见 `packages/todo/tool-todo/src/index.ts:136`。
-- 技能：`skills/<name>/SKILL.md` 带 YAML frontmatter，`skills.register({name, description, content})`。
-- 安装：`plugin_manager` `action: install_bundle`，`target` 传插件目录绝对路径。**不要用 shell 复现安装步骤。**
-- 其它扩展点（本次没用到，需要时查 `packages/preset/agent-preset/skills/dsh-doc/references/`）：
-  `practices.md`（guard/restrict、`tools/pre-execute` 返回 `ask`、`ctx.systemPrompt.section()`、
-  `agent.inject()`、`ctx.sessionProjections`、`ctx.slots`、`ctx.uiConversation.events.register()`、
-  `agent.followup()`）、`host-plugin.md`、`ui-plugin.md`、`compositions.md`。
+- 技能：`skills/<name>/SKILL.md` 带 YAML frontmatter，`skills.register({ name, description, content, source: 'runtime' })`。
+  `source` 和 `provider` 现在都在 `register()` 里兜底成 `'runtime'`（`index.ts:457`），省略也能加载；
+  本插件与 `dbro` 仍然显式传 `source`，因为注册表会把它原样透给加载路径校验
+  （`runtimeCandidate`，`index.ts:699`），写出来是对该契约的自解释，不靠兜底生效。
+- 安装：`plugin_manager` `action: install_bundle`，`target` 传插件目录绝对路径。不要用 shell 复现安装步骤。
+  **已在本 profile 启用的插件走的是 `file:<源目录>`，改源码后必须重启 host 才会重新读模块。**
+  禁用/启用（`set_bundle`）会重跑 `apply` 并重挂 fiber，但 ESM 模块缓存不变，`skill.js` 的改动不会生效。
+- **`plugins/` 不在 lint 与 typecheck 覆盖范围内**：`pnpm tsx scripts/run-oxlint.ts plugins/hyt-im` 回
+  「No files found to lint」，`pnpm run typecheck` 的 5 个 gate 也不检查插件 JS。插件侧的护栏只有
+  `node --check`、`test/logic.test.mjs` 和运行时实测，改完必须自己跑，别指望仓库闸门兜住。
+- 其它扩展点（需要时查 `packages/preset/agent-preset/skills/dsh-doc/references/`）：`practices.md`
+  （guard/restrict、`tools/pre-execute` 返回 `ask`、`ctx.systemPrompt.section()`、`agent.inject()`、
+  `ctx.sessionProjections`、`ctx.slots`、`ctx.uiConversation.events.register()`、`agent.followup()`）、
+  `host-plugin.md`、`ui-plugin.md`、`compositions.md`。新消息监听要挑这里的形态。
 
-## 六、下次开工命令
+## 六、下次开工命令（PowerShell，本机 Windows）
 
-```bash
-# 1. 确认库还在、账号没变
-sqlite3 "file:$HOME/Documents/CHFile/csT1002173/chatmsg.db?mode=ro" \
-  "select count(*), max(Id) from chatmsg;"
+```powershell
+cd D:\dev\projects\v-dsh
 
-# 2. 补 src/skill.js（否则插件加载失败）——照抄
-cat /Users/ekko/Projects/deepseek-harness/plugins/dbro/src/skill.js
+# 1. 回归测试（不需要 harness 依赖，源码态就能跑）
+node --test plugins/hyt-im/test/logic.test.mjs
+
+# 2. 确认库水位
+node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('C:/Users/Administrator/Documents/CHFile/csT1002173/chatmsg.db',{readOnly:true});console.log(d.prepare('select count(*) n, max(Id) mx from chatmsg').get());d.close()"
 
 # 3. 语法自检
-node --check /Users/ekko/Projects/deepseek-harness/plugins/hyt-im/index.js
-for f in /Users/ekko/Projects/deepseek-harness/plugins/hyt-im/src/*.js; do node --check "$f"; done
+node --check plugins/hyt-im/index.js
+Get-ChildItem plugins/hyt-im/src/*.js | ForEach-Object { node --check $_.FullName }
 
-# 4. 安装（用 plugin_manager，不要用 shell）
-#    action: install_bundle, target: /Users/ekko/Projects/deepseek-harness/plugins/hyt-im
-
-# 5. 新会话里验证：hyt_accounts → hyt_overview → hyt_sessions → hyt_messages
+# 4. 重启 DSH host 进程，然后在新会话里验证：
+#    skill hyt-im（应当加载成功）→ hyt_accounts → hyt_overview → hyt_sessions（看群名）
+#    → hyt_messages（看 newestId 水位与「发送状态」只出现在 → 开头的行）→ hyt_stats（时间跨度起点不为空）
 ```
 
-## 七、相关既有资产（`~/agents`）
+## 七、相关既有资产（`~/agents`，来自 macOS 侧）
 
-- `tools/chatlog/chat_analyze.py`、`chat_extract.py` — 已有的本地库只读分析（Python），逻辑可参照。
-- `tools/chim-msg/chim_msg.py` — 撤回，走服务端 `POST /rx/openapi/messages/recall`（**管理员接口，用户明确说不要管这套**）。
-- `tools/chim-msg/chim_export.py` — 导出，走 `/rx/messages/export`。
+- `tools/chatlog/chat_analyze.py`、`chat_extract.py` — 本地库只读分析（Python），逻辑可参照。
 - `skills/虹云通消息分析/SKILL.md`、`skills/运维消息撤回/SKILL.md`、`skills/虹云通聊天记录导出/SKILL.md`。
-- 用户已明确：**这些技能里「不提供消息查询能力」「正文不回显」的红线，在本插件上不适用**，
-  能开放的能力都开放。
+- 用户已明确：**这些技能里「不提供消息查询能力」「正文不回显」的红线，在本插件上不适用**，能开放的能力都开放。
