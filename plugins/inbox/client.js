@@ -183,17 +183,21 @@ window.__ModuleLoader__.load({
 }
 .${PREFIX}-markAll {
   flex: none;
-  padding: 4px 12px;
+  padding: 5px 14px;
   border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 14px;
-  background: transparent;
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-secondary);
   font: inherit;
   font-size: 13px;
   line-height: 20px;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
 }
-.${PREFIX}-markAll:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.${PREFIX}-markAll:hover:not(:disabled) {
+  border-color: var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-primary);
+}
 .${PREFIX}-markAll:disabled { opacity: 0.5; cursor: default; }
 .${PREFIX}-notice {
   display: flex;
@@ -202,40 +206,49 @@ window.__ModuleLoader__.load({
   gap: 8px;
   margin-bottom: 16px;
   padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 24%, transparent);
+  border-radius: var(--dsw-radius-md);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 7%, transparent);
   color: var(--dsw-alias-label-secondary);
   font-size: 13px;
   line-height: 20px;
 }
-.${PREFIX}-noticeGlyph { flex: none; margin-top: 2px; }
+.${PREFIX}-noticeGlyph { flex: none; margin-top: 2px; color: var(--dsw-alias-state-warn-primary); }
 .${PREFIX}-filters {
-  display: flex;
+  display: inline-flex;
+  align-self: flex-start;
   flex: none;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 2px;
+  margin-bottom: 16px;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
 }
 .${PREFIX}-tab {
-  padding: 4px 10px;
+  padding: 4px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   font: inherit;
   font-size: 13px;
   line-height: 20px;
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.${PREFIX}-tab:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.${PREFIX}-tab:hover { color: var(--dsw-alias-label-primary); }
 .${PREFIX}-tabActive,
 .${PREFIX}-tabActive:hover {
-  background: var(--dsw-alias-bg-layer-1);
+  background: var(--dsw-alias-bg-overlay);
   color: var(--dsw-alias-label-primary);
   font-weight: 500;
 }
 .${PREFIX}-list {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 8px;
   margin: 0;
   padding: 0 0 8px;
   list-style: none;
@@ -245,26 +258,43 @@ window.__ModuleLoader__.load({
   width: 100%;
   align-items: flex-start;
   gap: 12px;
-  padding: 12px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
+  padding: 12px 14px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: border-color 0.15s ease;
 }
-.${PREFIX}-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.${PREFIX}-row:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
+.${PREFIX}-row:hover { border-color: var(--dsw-alias-border-l2); }
+.${PREFIX}-row:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
 .${PREFIX}-rowGlyph {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--dsw-radius-sm);
   color: var(--dsw-alias-label-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 10%, transparent);
+}
+.${PREFIX}-glyph-email {
+  color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 11%, transparent);
+}
+.${PREFIX}-glyph-todo {
+  color: var(--dsw-alias-state-done-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-done-primary) 11%, transparent);
+}
+.${PREFIX}-glyph-ticket {
+  color: var(--dsw-alias-state-warn-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
 }
 .${PREFIX}-rowBody {
   display: flex;
@@ -311,13 +341,14 @@ window.__ModuleLoader__.load({
   flex: none;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
+  gap: 6px;
 }
 .${PREFIX}-time {
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
   line-height: 18px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .${PREFIX}-pill {
   padding: 0 8px;
@@ -357,31 +388,35 @@ window.__ModuleLoader__.load({
   display: flex;
   flex: 1 0 auto;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 .${PREFIX}-detailTop {
   display: flex;
   flex: none;
   align-items: center;
   padding-top: 20px;
-  margin-bottom: 20px;
+  margin-bottom: 4px;
 }
 .${PREFIX}-back {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-left: -10px;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
+  padding: 5px 12px 5px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-secondary);
   font: inherit;
   font-size: 13px;
   line-height: 20px;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
 }
-.${PREFIX}-back:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.${PREFIX}-back:hover {
+  border-color: var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-primary);
+}
 .${PREFIX}-detailTitle {
   margin: 0;
   font-size: 20px;
@@ -393,12 +428,31 @@ window.__ModuleLoader__.load({
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .${PREFIX}-detailKind {
-  color: var(--dsw-alias-label-tertiary);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: 9px;
   font-size: 12px;
   line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 10%, transparent);
+}
+.${PREFIX}-detailKind svg { display: block; }
+.${PREFIX}-detailKind.${PREFIX}-glyph-email {
+  color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+}
+.${PREFIX}-detailKind.${PREFIX}-glyph-todo {
+  color: var(--dsw-alias-state-done-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-done-primary) 10%, transparent);
+}
+.${PREFIX}-detailKind.${PREFIX}-glyph-ticket {
+  color: var(--dsw-alias-state-warn-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 11%, transparent);
 }
 .${PREFIX}-fields {
   display: grid;
@@ -406,8 +460,9 @@ window.__ModuleLoader__.load({
   gap: 8px 16px;
   margin: 0;
   padding: 14px 16px;
-  border-radius: 10px;
-  background: var(--dsw-alias-interactive-bg-hover);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
   font-size: 13px;
   line-height: 20px;
 }
@@ -426,6 +481,10 @@ window.__ModuleLoader__.load({
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
 }
 .${PREFIX}-section h2 {
   margin: 0;
@@ -433,11 +492,42 @@ window.__ModuleLoader__.load({
   line-height: 20px;
   font-weight: 500;
 }
+.${PREFIX}-sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
 .${PREFIX}-section p {
   margin: 0;
   color: var(--dsw-alias-label-secondary);
   font-size: 14px;
   line-height: 22px;
+}
+.${PREFIX}-checkProgress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.${PREFIX}-progressTrack {
+  width: 120px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent);
+}
+.${PREFIX}-progressFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--dsw-alias-state-business-primary);
+}
+.${PREFIX}-progressValue {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
 }
 .${PREFIX}-attachments,
 .${PREFIX}-checklist,
@@ -456,32 +546,44 @@ window.__ModuleLoader__.load({
   display: inline-flex;
   align-self: flex-start;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 10px;
+  padding: 6px 12px 6px 6px;
   border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-md);
+  transition: border-color 0.15s ease;
 }
-.${PREFIX}-attachment svg { flex: none; color: var(--dsw-alias-label-tertiary); }
+.${PREFIX}-attachment:hover { border-color: var(--dsw-alias-border-l2); }
+.${PREFIX}-attachmentIcon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--dsw-radius-sm);
+  color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+}
 .${PREFIX}-check {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
 }
 .${PREFIX}-checkBox {
   display: inline-flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 4px;
-  color: var(--dsw-alias-brand-primary);
+  border-radius: var(--dsw-radius-xs);
+  color: var(--dsw-alias-state-business-primary);
 }
 .${PREFIX}-checkBox[data-done] {
   border-color: transparent;
-  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
 }
 .${PREFIX}-checkDone {
   color: var(--dsw-alias-label-tertiary);
@@ -490,7 +592,7 @@ window.__ModuleLoader__.load({
 .${PREFIX}-timeline {
   margin-left: 5px;
   padding-left: 16px;
-  border-left: 1px solid var(--dsw-alias-border-l1);
+  border-left: 1px solid var(--dsw-alias-border-l2);
 }
 .${PREFIX}-event {
   position: relative;
@@ -501,17 +603,20 @@ window.__ModuleLoader__.load({
 .${PREFIX}-event::before {
   content: '';
   position: absolute;
-  left: -19.5px;
+  left: -21.5px;
   top: 7px;
-  width: 7px;
-  height: 7px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--dsw-alias-bg-layer-1);
   border-radius: 50%;
   background: var(--dsw-alias-label-tertiary);
 }
+.${PREFIX}-eventFirst::before { background: var(--dsw-alias-state-business-primary); }
 .${PREFIX}-eventTime {
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
   line-height: 20px;
+  font-variant-numeric: tabular-nums;
 }
 `
 
@@ -662,6 +767,7 @@ window.__ModuleLoader__.load({
       const heading = React.useRef(null)
       React.useEffect(() => { heading.current?.focus() }, [item.id])
       const Glyph = GLYPHS[item.kind] ?? InboxGlyph
+      const doneCount = item.checklist === undefined ? 0 : item.checklist.filter(entry => entry.done).length
       const body = key => t(key).split(/\n{2,}/).map((paragraph, index) => h('p', { key: index }, paragraph))
 
       return h('article', { className: `${PREFIX}-detail` },
@@ -672,7 +778,7 @@ window.__ModuleLoader__.load({
         h('header', null,
           h('h1', { ref: heading, tabIndex: -1, className: `${PREFIX}-detailTitle` }, t(`demo.${item.id}.title`)),
           h('div', { className: `${PREFIX}-detailMeta` },
-            h('span', { className: `${PREFIX}-detailKind` }, h(Glyph, { size: 12 }), t(KIND_LABELS[item.kind])),
+            h('span', { className: `${PREFIX}-detailKind ${PREFIX}-glyph-${item.kind}` }, h(Glyph, { size: 12 }), t(KIND_LABELS[item.kind])),
             h('span', { className: `${PREFIX}-pill ${PREFIX}-pill${toneName(item.tone)}` }, t(item.status)),
             h('span', { className: `${PREFIX}-time` }, t(`demo.${item.id}.time`)))),
         h('dl', { className: `${PREFIX}-fields` },
@@ -688,12 +794,24 @@ window.__ModuleLoader__.load({
             h('h2', null, t('section.attachments')),
             h('ul', { className: `${PREFIX}-attachments` },
               item.attachments.map(key => h('li', { className: `${PREFIX}-attachment`, key },
-                h(FileGlyph, { size: 14 }),
+                h('span', { className: `${PREFIX}-attachmentIcon` }, h(FileGlyph, { size: 14 })),
                 h('span', null, t(key)))))),
         item.checklist === undefined
           ? null
           : h('section', { className: `${PREFIX}-section` },
-            h('h2', null, t('section.checklist')),
+            h('div', { className: `${PREFIX}-sectionHead` },
+              h('h2', null, t('section.checklist')),
+              h('div', {
+                className: `${PREFIX}-checkProgress`,
+                role: 'progressbar',
+                'aria-label': t('a11y.progress'),
+                'aria-valuenow': doneCount,
+                'aria-valuemin': 0,
+                'aria-valuemax': item.checklist.length,
+              },
+              h('span', { className: `${PREFIX}-progressTrack` },
+                h('span', { className: `${PREFIX}-progressFill`, style: { width: `${Math.round((doneCount / item.checklist.length) * 100)}%` } })),
+              h('span', { className: `${PREFIX}-progressValue` }, `${doneCount}/${item.checklist.length}`))),
             h('ul', { className: `${PREFIX}-checklist` },
               item.checklist.map(entry => h('li', { className: `${PREFIX}-check`, key: entry.text },
                 h('span', { className: `${PREFIX}-checkBox`, 'data-done': entry.done ? '' : undefined },
@@ -705,7 +823,10 @@ window.__ModuleLoader__.load({
           : h('section', { className: `${PREFIX}-section` },
             h('h2', null, t('section.activity')),
             h('ol', { className: `${PREFIX}-timeline` },
-              item.timeline.map(entry => h('li', { className: `${PREFIX}-event`, key: entry.text },
+              item.timeline.map((entry, entryIndex) => h('li', {
+                className: `${PREFIX}-event${entryIndex === 0 ? ` ${PREFIX}-eventFirst` : ''}`,
+                key: entry.text,
+              },
                 h('span', { className: `${PREFIX}-eventTime` }, t(entry.time)),
                 h('span', null, t(entry.text)))))))
     }
@@ -793,7 +914,7 @@ window.__ModuleLoader__.load({
                     className: `${PREFIX}-row`,
                     onClick: () => { openItem(item) },
                   },
-                  h('span', { className: `${PREFIX}-rowGlyph` }, h(Glyph, { size: 16 })),
+                  h('span', { className: `${PREFIX}-rowGlyph ${PREFIX}-glyph-${item.kind}` }, h(Glyph, { size: 16 })),
                   h('span', { className: `${PREFIX}-rowBody` },
                     h('span', { className: `${PREFIX}-titleLine` },
                       h('span', { className: `${PREFIX}-title${unread ? ` ${PREFIX}-titleUnread` : ''}` }, t(`demo.${item.id}.title`)),
@@ -824,6 +945,7 @@ window.__ModuleLoader__.load({
           'filter.ticket': 'IT tickets',
           'a11y.unread': 'Unread',
           'a11y.done': 'Done',
+          'a11y.progress': 'Progress',
           'detail.back': 'Back to inbox',
           'status.reply': 'Reply needed',
           'status.confirm': 'Confirm',
@@ -984,6 +1106,7 @@ window.__ModuleLoader__.load({
           'filter.ticket': 'IT 工单',
           'a11y.unread': '未读',
           'a11y.done': '已完成',
+          'a11y.progress': '完成进度',
           'detail.back': '返回收件箱',
           'status.reply': '待回复',
           'status.confirm': '待确认',
