@@ -1,10 +1,12 @@
 /**
- * Browser half of Relay: the paper-plane delivery effect.
+ * Browser half of Relay: the row-to-row delivery animation.
  *
- * A watcher in the current Session reads successful `session_send` tool
- * results, an overlay flies a paper plane with a light trail to the target
- * Session row, and the row shows a received badge. Everything here is
- * presentation; delivery and history stay in the Host half.
+ * A watcher on the current Session reads successful `session_send` results,
+ * then an envelope flies from the SENDING Session's sidebar row to the
+ * RECEIVING Session's row — both rows are highlighted so each delivery shows
+ * who sent to whom. Ported from the user's reference implementation
+ * (`.dsh/ref/deliver-flight/`: envelope-flight.ts, overlay.ts, motion.ts);
+ * see README for the port mapping and the undo-bin exclusion.
  */
 window.__ModuleLoader__.load({
   id: 'dsh-relay',
@@ -12,13 +14,278 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-    /** Duration of one flight, in milliseconds. */
+    // ---------- reference: envelope-flight.ts constants ----------
+    const WIDTH = 38
+    const HEIGHT = 28
+    const SVG_NS = 'http://www.w3.org/2000/svg'
     const FLIGHT_MS = 1500
-    /** Trailing light dots outlive the flight by this budget. */
-    const DOT_LIFE_MS = 620
-    /** Interval between two trail dots. */
-    const DOT_INTERVAL_MS = 38
+    // Fraction of the clock the letter rests on the sender before it leaves, and the fraction at which it lands.
+    const HOLD = 0.24
+    const ARRIVE = 0.9
+    const STEPS = 28
+    const HIGHLIGHT_MS = 900
 
+    // DSH theme variables stand in for the reference's --v2-* tokens; the fallback renders
+    // correctly on a host whose theme defines none of the aliased names.
+    const ACCENT = 'var(--dsw-alias-onboarding-accent, var(--dsw-alias-state-business-primary, #679EFE))'
+    const PAPER = 'var(--dsw-alias-button-elevated-fill, rgba(255,255,255,.92))'
+    const SHADOW =
+      'drop-shadow(0 8px 18px color-mix(in oklch, var(--dsw-alias-onboarding-accent, #679EFE) 45%, transparent))'
+      + ' drop-shadow(0 2px 6px rgb(0 0 0 / 0.22))'
+
+    /**
+     * Reduced-motion read, ported from the reference motion.ts with the
+     * opencode-specific `<html data-motion>` override dropped. Matches the
+     * `matchMedia` pattern the DSH client packages use inline
+     * (ui-chat/flow-motion.ts, ui-primitives AnimatedRows).
+     * @returns whether delivery animation must be skipped.
+     */
+    function prefersReducedMotion() {
+      return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
+    }
+
+    // ---------- reference: overlay.ts (mount + the one rAF driver) ----------
+    /** Fixed, non-interactive layer over the page. Callers own position, size, and content. */
+    function mountOverlay(element, zIndex) {
+      Object.assign(element.style, { position: 'fixed', pointerEvents: 'none', zIndex: String(zIndex) })
+      document.body.appendChild(element)
+    }
+
+    let frame = 0
+    const followers = new Set()
+    function pump() {
+      for (const follow of followers) follow()
+      frame = followers.size > 0 ? requestAnimationFrame(pump) : 0
+    }
+
+    /**
+     * Register a per-frame update while a cue is alive; the shared rAF loop stops
+     * with the last follower.
+     * @param update - per-frame callback re-reading live geometry.
+     * @returns the unregister function.
+     */
+    function followRow(update) {
+      followers.add(update)
+      if (frame === 0) frame = requestAnimationFrame(pump)
+      return () => {
+        followers.delete(update)
+        if (followers.size === 0 && frame !== 0) {
+          cancelAnimationFrame(frame)
+          frame = 0
+        }
+      }
+    }
+
+    /**
+     * The sidebar row for one Session. `data-row-key="session:<id>"` is the stable
+     * attribute ui-workspace renders on every session row; it replaces the
+     * reference's `replicaRow` selector.
+     * @param sessionId - the Session whose row is needed.
+     * @returns the row element, or null when the row is not on screen.
+     */
+    function rowElement(sessionId) {
+      return document.querySelector(`[data-row-key="session:${CSS.escape(String(sessionId))}"]`)
+    }
+
+    // ---------- reference: easing + quadratic route ----------
+    function easeInOut(u) {
+      return u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2
+    }
+
+    function curve(x0, y0, cx, cy, x1, y1) {
+      return (u) => {
+        const t = easeInOut(u)
+        const inv = 1 - t
+        return {
+          x: inv * inv * x0 + 2 * inv * t * cx + t * t * x1,
+          y: inv * inv * y0 + 2 * inv * t * cy + t * t * y1,
+        }
+      }
+    }
+
+    /** Trace the accent route behind the letter so the direction reads at a glance. */
+    function createTrail(d) {
+      const svg = document.createElementNS(SVG_NS, 'svg')
+      svg.setAttribute('width', String(window.innerWidth))
+      svg.setAttribute('height', String(window.innerHeight))
+      svg.dataset.sessionDeliveryTrail = ''
+      svg.setAttribute('aria-hidden', 'true')
+      Object.assign(svg.style, { left: '0', top: '0', overflow: 'visible' })
+      const path = document.createElementNS(SVG_NS, 'path')
+      path.setAttribute('d', d)
+      path.setAttribute('fill', 'none')
+      path.setAttribute('stroke', ACCENT)
+      path.setAttribute('stroke-width', '1.5')
+      path.setAttribute('stroke-linecap', 'round')
+      path.style.opacity = '0.5'
+      svg.appendChild(path)
+      return { svg, path }
+    }
+
+    function createLetter() {
+      const letter = document.createElement('div')
+      letter.dataset.sessionDeliveryLetter = ''
+      letter.setAttribute('aria-hidden', 'true')
+      Object.assign(letter.style, {
+        left: '0',
+        top: '0',
+        width: `${WIDTH}px`,
+        height: `${HEIGHT}px`,
+        willChange: 'transform',
+      })
+      const body = document.createElement('div')
+      Object.assign(body.style, { width: '100%', height: '100%', willChange: 'transform, opacity', filter: SHADOW })
+      body.innerHTML = `<svg width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 38 28" fill="none">`
+        + `<rect x="1" y="1" width="36" height="26" rx="5" fill="${PAPER}" stroke="${ACCENT}" stroke-width="1.8"/>`
+        + `<path d="M4 5.5 19 17 34 5.5" stroke="${ACCENT}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      letter.appendChild(body)
+      return { letter, body }
+    }
+
+    /** Ring a row with an inset accent border that fades out. */
+    function highlight(row, duration) {
+      if (prefersReducedMotion() || row.animate === undefined) return
+      row.animate(
+        [
+          { boxShadow: `inset 0 0 0 0px ${ACCENT}` },
+          { boxShadow: `inset 0 0 0 2px ${ACCENT}`, offset: 0.3 },
+          { boxShadow: `inset 0 0 0 0px ${ACCENT}` },
+        ],
+        { duration, easing: 'ease-out' },
+      )
+    }
+
+    /**
+     * Fly an envelope from the sender's sidebar row to the receiver's, arc it out of
+     * the list, and land it with a highlight on both rows. A row that is not on screen
+     * has nowhere to launch from or land on, so the flight is skipped, never guessed.
+     * @param from - the sending Session id.
+     * @param to - the receiving Session id.
+     */
+    function playDeliveryFlight(from, to) {
+      if (typeof document === 'undefined' || prefersReducedMotion() || from === to) return
+
+      const source = rowElement(from)
+      const target = rowElement(to)
+      if (source === null || target === null) return
+
+      const fromRect = source.getBoundingClientRect()
+      const toRect = target.getBoundingClientRect()
+      if (fromRect.width === 0 || toRect.width === 0) return
+
+      const startX = fromRect.left + fromRect.width / 2
+      const startY = fromRect.top + fromRect.height / 2
+      const endX = toRect.left + toRect.width / 2
+      const endY = toRect.top + toRect.height / 2
+      // Bow the route sideways so the letter arcs out of the list instead of sliding along the rows.
+      const bend = Math.min(110, Math.max(40, Math.hypot(endX - startX, endY - startY) * 0.28))
+      const controlX = (startX + endX) / 2 - bend
+      const controlY = (startY + endY) / 2
+      const route = curve(startX, startY, controlX, controlY, endX, endY)
+
+      const { letter, body } = createLetter()
+      letter.dataset.relayFrom = String(from)
+      letter.dataset.relayTo = String(to)
+      const { svg, path } = createTrail(`M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`)
+      mountOverlay(svg, 9998)
+      mountOverlay(letter, 9999)
+
+      // Both endpoints can shift while the letter is in the air — a row inserted between
+      // them, the list settling. Shift the whole route by how far the pair's midpoint
+      // moved, so the letter keeps flying between the rows themselves; the absolute
+      // keyframe coordinates stay valid throughout.
+      const midpoint = () => {
+        const a = source.getBoundingClientRect()
+        const b = target.getBoundingClientRect()
+        return {
+          x: (a.left + a.width / 2 + b.left + b.width / 2) / 2,
+          y: (a.top + a.height / 2 + b.top + b.height / 2) / 2,
+        }
+      }
+      const origin = midpoint()
+      const stop = followRow(() => {
+        const now = midpoint()
+        const dx = now.x - origin.x
+        const dy = now.y - origin.y
+        svg.style.transform = `translate(${dx}px, ${dy}px)`
+        letter.style.left = `${dx}px`
+        letter.style.top = `${dy}px`
+      })
+
+      highlight(source, HIGHLIGHT_MS)
+
+      const translate = (x, y) => `translate(${x - WIDTH / 2}px, ${y - HEIGHT / 2}px)`
+      const at = (u) => {
+        const point = route(u)
+        return { transform: translate(point.x, point.y), offset: HOLD + u * (ARRIVE - HOLD) }
+      }
+
+      // Displacement, scale, and the traced line run in parallel on one shared offset;
+      // only the landing rebound hangs on flight.finished.
+      const flight = letter.animate(
+        [
+          { transform: translate(startX, startY), offset: 0 },
+          { transform: translate(startX, startY), offset: HOLD },
+          ...Array.from({ length: STEPS }, (_, index) => at((index + 1) / STEPS)),
+          { transform: translate(endX, endY), offset: 1 },
+        ],
+        { duration: FLIGHT_MS, easing: 'linear' },
+      )
+
+      body.animate(
+        [
+          { transform: 'scale(.3)', opacity: 0 },
+          { transform: 'scale(1)', opacity: 1, offset: 0.12 },
+          { transform: 'scale(1.12)', opacity: 1, offset: HOLD },
+          { transform: 'scale(1)', opacity: 1, offset: ARRIVE },
+          { transform: 'scale(.55)', opacity: 0, offset: 1 },
+        ],
+        { duration: FLIGHT_MS, easing: 'cubic-bezier(.22, 1, .36, 1)' },
+      )
+
+      const length = path.getTotalLength()
+      path.style.strokeDasharray = `${length}`
+      path.animate(
+        [
+          { strokeDashoffset: `${length}`, opacity: 0.5, offset: 0 },
+          { strokeDashoffset: `${length}`, opacity: 0.5, offset: HOLD },
+          ...Array.from({ length: STEPS }, (_, index) => {
+            const u = (index + 1) / STEPS
+            return {
+              strokeDashoffset: `${length * (1 - easeInOut(u))}`,
+              opacity: 0.5,
+              offset: HOLD + u * (ARRIVE - HOLD),
+            }
+          }),
+          { strokeDashoffset: '0', opacity: 0, offset: 1 },
+        ],
+        { duration: FLIGHT_MS, easing: 'linear' },
+      )
+
+      const finish = () => {
+        stop()
+        letter.remove()
+        svg.remove()
+        highlight(target, HIGHLIGHT_MS)
+        if (prefersReducedMotion() || target.animate === undefined) return
+        target.animate(
+          [
+            { transform: 'scale(1)' },
+            { transform: 'scale(1.035)', offset: 0.35 },
+            { transform: 'scale(1)' },
+          ],
+          { duration: 520, easing: 'cubic-bezier(.34, 1.36, .64, 1)' },
+        )
+      }
+
+      void flight.finished.then(finish, () => {
+        stop()
+        letter.remove()
+        svg.remove()
+      })
+    }
+
+    // ---------- Host delivery events ----------
     /**
      * Event types that carry one tool call's presentation metadata: a direct call
      * arrives as `tool/result`, a call nested inside `run_code` as `tool/ptc-dispatch`.
@@ -28,7 +295,7 @@ window.__ModuleLoader__.load({
     /**
      * Delivery metadata of one successful `session_send`, or undefined for any other event.
      * @param event - one event from the current Session window.
-     * @returns the send metadata with `target_session_id` and `message_id`, or undefined.
+     * @returns the send metadata, or undefined.
      */
     function sendResultMeta(event) {
       if (!RESULT_EVENT_TYPES.has(event.type)) return undefined
@@ -38,62 +305,9 @@ window.__ModuleLoader__.load({
       return meta?.relay === 'send' ? meta : undefined
     }
 
-    /** Message channel between the watcher, the overlay, and row badges. */
-    const listeners = new Set()
-    function publish(event) {
-      for (const listener of listeners) listener(event)
-    }
-    function listen(listener) {
-      listeners.add(listener)
-      return () => { listeners.delete(listener) }
-    }
-
-    /** Row geometry providers keyed by Session id; the overlay reads them at launch. */
-    const rowRects = new Map()
-    function rowRect(sessionId) {
-      const read = rowRects.get(sessionId)
-      return read === undefined ? null : read()
-    }
-
-    /** Paper-plane glyph used for flight and the received badge. */
-    const PLANE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true">'
-      + '<path d="M2.2 11.3 21.6 3.1 14.2 20.9l-3.1-6.2L2.2 11.3Z" fill="#679EFE"/>'
-      + '<path d="M11.1 14.7 17.9 6.6" stroke="#fff" stroke-width="1.3" stroke-linecap="round" opacity=".9"/>'
-      + '</svg>'
-
-    /** Scoped stylesheet; removed with the plugin fiber. */
-    const CSS = `
-      .dsh-relay-layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483000; overflow: hidden; }
-      .dsh-relay-plane { position: absolute; left: 0; top: 0; width: 24px; height: 24px; margin: -12px 0 0 -12px; will-change: transform; filter: drop-shadow(0 0 7px rgba(103,158,254,.85)); }
-      .dsh-relay-plane svg { display: block; width: 100%; height: 100%; }
-      .dsh-relay-dot { position: absolute; left: 0; top: 0; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: radial-gradient(circle, rgba(178,212,255,.95) 0%, rgba(103,158,254,.45) 45%, rgba(103,158,254,0) 72%); will-change: transform, opacity; }
-      .dsh-relay-pulse { position: absolute; left: 0; top: 0; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; border: 2px solid rgba(103,158,254,.8); animation: dsh-relay-pulse 900ms ease-out forwards; }
-      @keyframes dsh-relay-pulse { 0% { transform: scale(.35); opacity: .95 } 100% { transform: scale(1.9); opacity: 0 } }
-      .dsh-relay-row { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
-      .dsh-relay-badge { display: block; width: 12px; height: 12px; animation: dsh-relay-badge 1600ms ease-out forwards; }
-      .dsh-relay-badge svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 0 4px rgba(103,158,254,.8)); }
-      @keyframes dsh-relay-badge { 0% { transform: scale(.2); opacity: 0 } 18% { transform: scale(1.25); opacity: 1 } 65% { transform: scale(1); opacity: 1 } 100% { transform: scale(1); opacity: 0 } }
-      @media (prefers-reduced-motion: reduce) {
-        .dsh-relay-plane { display: none; }
-        .dsh-relay-dot { display: none; }
-        .dsh-relay-pulse { animation-duration: 350ms; }
-        .dsh-relay-badge { animation-duration: 600ms; }
-      }
-    `
-
-    /** Point on the quadratic curve at `t`. */
-    function curvePoint(start, control, end, t) {
-      const inv = 1 - t
-      return {
-        x: inv * inv * start.x + 2 * inv * t * control.x + t * t * end.x,
-        y: inv * inv * start.y + 2 * inv * t * control.y + t * t * end.y,
-      }
-    }
-
-    /** Watch the current Session's tool results and publish deliveries. */
+    /** Watch the current Session's send results and fly the matching deliveries. */
     function makeWatcher(ctx) {
-      return function RelayWatcher({ sessionId }) {
-        const originRef = React.useRef(null)
+      return function RelayWatch({ sessionId }) {
         React.useEffect(() => {
           if (sessionId === undefined) return undefined
           const binding = ctx.sessions.binding(sessionId)
@@ -111,14 +325,10 @@ window.__ModuleLoader__.load({
               seen.add(event.seq)
               const meta = sendResultMeta(event)
               if (meta === undefined) continue
+              // The first pass marks history already seen; only later events fly.
               if (!primed) continue
-              publish({
-                kind: 'send',
-                fromSessionId: sessionId,
-                toSessionId: meta.target_session_id,
-                messageId: meta.message_id,
-                origin: originRef.current?.getBoundingClientRect() ?? null,
-              })
+              const from = typeof meta.from_session_id === 'string' ? meta.from_session_id : sessionId
+              playDeliveryFlight(from, meta.target_session_id)
             }
             primed = true
           }
@@ -130,156 +340,26 @@ window.__ModuleLoader__.load({
           }
         }, [sessionId])
         return h('span', {
-          ref: originRef,
           'data-relay-origin': '',
           style: { position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' },
         })
       }
     }
 
-    /** Flight layer: one paper plane, its light trail, and the landing pulse. */
-    function RelayOverlay() {
-      const layerRef = React.useRef(null)
-      React.useEffect(() => {
-        const layer = layerRef.current
-        if (layer === null) return undefined
-        let disposed = false
-        const stop = listen((event) => {
-          if (event.kind !== 'send') return
-          void fly(event, layer, () => disposed)
-        })
-        return () => {
-          disposed = true
-          stop()
-          layer.replaceChildren()
-        }
-      }, [])
-      return h('div', { ref: layerRef, className: 'dsh-relay-layer', 'aria-hidden': 'true' })
-    }
-
-    /** Fly one plane from the composer to the target row, then pulse and notify it. */
-    async function fly(event, layer, isDisposed) {
-      const originRect = event.origin
-      const start = originRect === null
-        ? { x: window.innerWidth / 2, y: window.innerHeight * 0.78 }
-        : { x: originRect.left + originRect.width / 2, y: originRect.top + originRect.height / 2 - 60 }
-      const targetRect = rowRect(event.toSessionId)
-      const end = targetRect === null
-        ? { x: 120, y: 260 }
-        : { x: targetRect.left + targetRect.width / 2, y: targetRect.top + targetRect.height / 2 }
-      const control = { x: (start.x + end.x) / 2, y: Math.min(start.y, end.y) - 150 }
-      const plane = document.createElement('div')
-      plane.className = 'dsh-relay-plane'
-      plane.innerHTML = PLANE_SVG
-      layer.append(plane)
-      const dots = []
-      const startedAt = performance.now()
-      let lastDotAt = 0
-      await new Promise((resolve) => {
-        const frame = (now) => {
-          if (isDisposed()) {
-            resolve()
-            return
-          }
-          const progress = Math.min(1, (now - startedAt) / FLIGHT_MS)
-          const eased = progress * progress * (3 - 2 * progress)
-          const point = curvePoint(start, control, end, eased)
-          const ahead = curvePoint(start, control, end, Math.min(1, eased + 0.03))
-          const angle = Math.atan2(ahead.y - point.y, ahead.x - point.x) * 180 / Math.PI
-          plane.style.transform = `translate(${point.x}px, ${point.y}px) rotate(${angle}deg)`
-          if (now - lastDotAt >= DOT_INTERVAL_MS) {
-            lastDotAt = now
-            const dot = document.createElement('span')
-            dot.className = 'dsh-relay-dot'
-            layer.append(dot)
-            dots.push({ element: dot, bornAt: now, x: point.x, y: point.y })
-          }
-          for (const dot of dots) {
-            if (dot.gone === true) continue
-            const life = (now - dot.bornAt) / DOT_LIFE_MS
-            if (life >= 1) {
-              dot.gone = true
-              dot.element.remove()
-              continue
-            }
-            dot.element.style.transform = `translate(${dot.x}px, ${dot.y}px) scale(${1 - life * 0.72})`
-            dot.element.style.opacity = String(0.85 * (1 - life))
-          }
-          if (progress < 1) requestAnimationFrame(frame)
-          else resolve()
-        }
-        requestAnimationFrame(frame)
-      })
-      plane.remove()
-      for (const dot of dots) if (dot.gone !== true) dot.element.remove()
-      if (isDisposed()) return
-      const pulse = document.createElement('div')
-      pulse.className = 'dsh-relay-pulse'
-      pulse.style.transform = `translate(${end.x}px, ${end.y}px)`
-      layer.append(pulse)
-      setTimeout(() => pulse.remove(), 950)
-      publish({ kind: 'arrived', toSessionId: event.toSessionId })
-    }
-
-    /** Row badge that registers its row geometry and flashes when a plane lands. */
-    function RelayRow({ sessionId }) {
-      const ref = React.useRef(null)
-      const [landed, setLanded] = React.useState(false)
-      React.useEffect(() => {
-        rowRects.set(sessionId, () => ref.current?.getBoundingClientRect() ?? null)
-        return () => { rowRects.delete(sessionId) }
-      }, [sessionId])
-      React.useEffect(() => {
-        let timer
-        const stop = listen((event) => {
-          if (event.kind !== 'arrived' || event.toSessionId !== sessionId) return
-          setLanded(false)
-          setLanded(true)
-          clearTimeout(timer)
-          timer = setTimeout(() => setLanded(false), 1650)
-        })
-        return () => {
-          clearTimeout(timer)
-          stop()
-        }
-      }, [sessionId])
-      return h('span', { ref, className: 'dsh-relay-row', 'data-relay-session': sessionId },
-        landed === true
-          ? h('span', { className: 'dsh-relay-badge', dangerouslySetInnerHTML: { __html: PLANE_SVG } })
-          : null)
-    }
-
     return {
       /** Browser services the effect reads. */
       inject: ['slots', 'sessions'],
       /**
-       * Register the stylesheet, the watcher, the flight layer, and row badges.
+       * Register the send watcher; flight paints into body-mounted overlays.
        * @param ctx - browser plugin context.
        */
       apply(ctx) {
-        const style = document.createElement('style')
-        style.dataset.relay = 'effects'
-        style.textContent = CSS
-        ctx.effect(() => {
-          document.head.append(style)
-          return () => { style.remove() }
-        })
-
-        const Watcher = makeWatcher(ctx)
+        const Watch = makeWatcher(ctx)
         ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
           name: 'conversation.input.dock',
-          id: 'relay.origin',
+          id: 'relay.watch',
           order: 40,
-        }, Watcher))
-        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-          name: 'shell.overlay',
-          id: 'relay.flight',
-        }, RelayOverlay))
-        ctx.slots.inject('sidebar.session.row.trailing', () => ctx.slots.register({
-          name: 'sidebar.session.row.trailing',
-          id: 'relay.badge',
-          order: 60,
-        }, RelayRow))
+        }, Watch))
       },
     }
   },

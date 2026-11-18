@@ -443,6 +443,7 @@ export function apply(ctx, config) {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
       presentationMeta: (_args, value) => ({
         relay: 'send',
+        from_session_id: value.from_session_id,
         target_session_id: value.session_id,
         message_id: value.message_id,
       }),
