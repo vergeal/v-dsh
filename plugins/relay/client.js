@@ -313,6 +313,11 @@ window.__ModuleLoader__.load({
           const binding = ctx.sessions.binding(sessionId)
           if (binding === undefined) return undefined
           const seen = new Set()
+          // Highest seq present at priming. Loading older history or a reconnect
+          // repair page republishes PRE-EXISTING send results as seqs this watcher
+          // has never seen; replaying them would fly envelopes for deliveries that
+          // happened long ago. Every send at or below this floor is history.
+          let primedFloor = null
           let primed = false
           let disposed = false
           const scan = () => {
@@ -325,8 +330,15 @@ window.__ModuleLoader__.load({
               seen.add(event.seq)
               const meta = sendResultMeta(event)
               if (meta === undefined) continue
-              // The first pass marks history already seen; only later events fly.
-              if (!primed) continue
+              // The priming pass marks the window's existing history — its highest
+              // seq becomes the floor. Later events fly only when they are both new
+              // to this watcher and above the floor, so older history entering the
+              // window through loadOlder or a repair page never replays.
+              if (!primed) {
+                primedFloor = Math.max(primedFloor ?? -1, event.seq)
+                continue
+              }
+              if (event.seq <= primedFloor) continue
               const from = typeof meta.from_session_id === 'string' ? meta.from_session_id : sessionId
               playDeliveryFlight(from, meta.target_session_id)
             }
