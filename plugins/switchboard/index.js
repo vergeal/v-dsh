@@ -1,10 +1,10 @@
 /**
  * Relay: cross-session messaging for DeepSeek Harness.
  *
- * Host half. Registers the `session_*` tools that discover, read, activate,
+ * Host half of Switchboard. Registers the `session_*` tools that discover, read, activate,
  * message, create, fork, interrupt, rename, and archive Sessions. The browser
  * half (`client.js`) renders the paper-plane delivery effect.
- * @module dsh-relay
+ * @module dsh-switchboard
  */
 
 import { randomUUID } from 'node:crypto'
@@ -14,7 +14,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 
 /** Cordis plugin identity used by loader diagnostics. */
-export const name = 'relay'
+export const name = 'switchboard'
 
 /** Services required by the model-facing tools. */
 export const inject = ['tools', 'systemPrompt', 'sessions', 'agents']
@@ -259,7 +259,7 @@ function resolveConfig(config) {
 }
 
 /** Build the durable user message one Session sends to another. */
-function relayMessage(caller, text) {
+function dispatchMessage(caller, text) {
   return createUserMessage({
     content: [{ type: 'text', text }],
     source: {
@@ -472,7 +472,7 @@ export function apply(ctx, config) {
       }
       const key = args.request_id === undefined ? undefined : `${caller.id}:${args.request_id}`
       if (key !== undefined && receipts.has(key)) return receipts.get(key)
-      const message = relayMessage(caller, args.content)
+      const message = dispatchMessage(caller, args.content)
       if (delivery === 'steer') target.steer(message)
       else target.followup(message)
       const receipt = {

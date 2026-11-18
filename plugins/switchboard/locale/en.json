@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Switchboard",
+    "description": "Session dispatch and cross-session messaging: list, read, create, fork, and archive Sessions, send messages between Sessions, switch models across Sessions, and play a row-to-row delivery animation in the Web GUI."
+  }
+}

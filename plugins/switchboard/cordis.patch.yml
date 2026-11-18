@@ -1,0 +1,3 @@
+- insert:
+    - id: switchboard
+      name: 'dsh-switchboard'
