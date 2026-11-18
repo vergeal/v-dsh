@@ -16,11 +16,23 @@ dsh plugin --profile <name> add ./plugins/webwright
 The bundle inserts one `webwright` row. For source checkouts use `pnpm dsh plugin ...`. For a quick development
 load, add the package path to a `--patch` overlay instead.
 
-Playwright is a runtime dependency:
+Playwright is a runtime dependency. Install it with `--legacy-peer-deps`:
 
 ```sh
-cd plugins/webwright && npm install playwright-core
+cd plugins/webwright && npm install --legacy-peer-deps
 ```
+
+npm 7 and later auto-install `peerDependencies`, and this package declares the harness packages it shares with the
+host as peers (`@deepseek-ai/cordis`, `@deepseek-ai/dsh-tools`, `@deepseek-ai/schemastery`, range `*`). A plain
+`npm install` fetches 16 published `@deepseek-ai` packages from the public registry beside the host's own copy;
+those releases trail this repository's pre-stable tool-definition API, and the duplicated instances break plugin
+assembly. `--legacy-peer-deps` installs only `playwright-core` and leaves the peers to the running host, which is
+what the declaration exists to share. Installing through `dsh plugin add` uses pnpm, which resolves peers instead of
+fetching them, so the flag is needed only for the direct npm path.
+
+`node_modules/` and the npm-generated `package-lock.json` stay local and untracked. The lockfile is not committed:
+it pins one Playwright release to this machine, while the range in `package.json` is the supported contract, and an
+npm lockfile beside a pnpm workspace invites a second, conflicting dependency tree.
 
 The first tool call looks for Chrome, then Edge, then Playwright's bundled Chromium. To use the bundled build, run
 `npx playwright install chromium`.
@@ -81,6 +93,11 @@ node --import tsx/esm plugins/webwright/tests/register.mjs
 # Live browser: launch, snapshot, refs, surfaces, click, screenshot
 node plugins/webwright/tests/browser.mjs
 ```
+
+Both checks run from the repository root. `register.mjs` imports the plugin entry, whose harness peers resolve
+through the repository's tsconfig paths, so it needs `--import tsx/esm`; plain `node` fails with
+`ERR_MODULE_NOT_FOUND: @deepseek-ai/schemastery`. `browser.mjs` imports only `browser.js` and resolves
+`playwright-core` from this package's own `node_modules`, so plain `node` is enough.
 
 The live check skips when no browser can start.
 
