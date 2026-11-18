@@ -313,39 +313,43 @@ window.__ModuleLoader__.load({
           const binding = ctx.sessions.binding(sessionId)
           if (binding === undefined) return undefined
           const seen = new Set()
-          // Highest seq present at priming. Loading older history or a reconnect
-          // repair page republishes PRE-EXISTING send results as seqs this watcher
-          // has never seen; replaying them would fly envelopes for deliveries that
-          // happened long ago. Every send at or below this floor is history.
-          let primedFloor = null
-          let primed = false
+          // Delivery baseline: the highest event seq of the FIRST NONEMPTY snapshot.
+          // Loading older history or a reconnect repair page republishes PRE-EXISTING
+          // send results as seqs this watcher has never seen; replaying them would fly
+          // envelopes for deliveries that happened long ago. The baseline covers ALL
+          // events, not only sends, so an early send event can never dodge it.
+          let baseline = null
           let disposed = false
           const scan = () => {
             if (disposed) return
             const window = binding.eventSource.getSnapshot()
-            for (const entry of window.entries) {
-              if (entry.type !== 'event') continue
-              const event = entry.event
-              if (seen.has(event.seq)) continue
-              seen.add(event.seq)
+            const events = window.entries.filter(entry => entry.type === 'event').map(entry => entry.event)
+            // An empty snapshot means the window is not hydrated yet: no trustworthy
+            // baseline exists, so nothing may fly this round and priming stays open.
+            // A genuinely blank Session stays here too — it has no sends to replay, and
+            // its first real send arrives as a live event that flies after hydrate.
+            if (baseline === null) {
+              if (events.length === 0) return
+              baseline = Math.max(...events.map(event => event.seq))
+              for (const event of events) seen.add(event.seq)
+              return
+            }
+            // Hard guard: without a baseline nothing ever flies, however the code is
+            // refactored later.
+            if (baseline === null) return
+            for (const event of events) {
+              if (event.seq <= baseline) continue
+              baseline = event.seq
               const meta = sendResultMeta(event)
               if (meta === undefined) continue
-              // The priming pass marks the window's existing history — its highest
-              // seq becomes the floor. Later events fly only when they are both new
-              // to this watcher and above the floor, so older history entering the
-              // window through loadOlder or a repair page never replays.
-              if (!primed) {
-                primedFloor = Math.max(primedFloor ?? -1, event.seq)
-                continue
-              }
-              if (event.seq <= primedFloor) continue
               const from = typeof meta.from_session_id === 'string' ? meta.from_session_id : sessionId
               playDeliveryFlight(from, meta.target_session_id)
             }
-            primed = true
           }
-          const stop = binding.eventSource.subscribe(scan)
+          // Baseline BEFORE subscribing: the subscription callback itself runs scan, so
+          // subscribing first would risk a synchronous first callback racing ahead of it.
           scan()
+          const stop = binding.eventSource.subscribe(scan)
           return () => {
             disposed = true
             stop()
