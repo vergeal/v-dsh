@@ -11,7 +11,8 @@ Every tool has exactly one job. The model-facing descriptions state when not to 
 | `session_list` | List Sessions the caller may address | — |
 | `session_read` | Read one Session's conversation messages | `session_id` |
 | `session_open` | Make a cold Session resident | `session_id` |
-| `session_send` | Deliver one message to a resident Session | `session_id`, `content` |
+| `session_queue_send` | Queue one message for the target's next turn; FIFO, never interrupts | `session_id`, `content` |
+| `session_steer_send` | Redirect the target's current run at its next step boundary | `session_id`, `content` |
 | `session_wait` | Wait until a resident Session is idle | `session_id` |
 | `session_create` | Create a blank Session | — |
 | `session_fork` | Copy history from an existing Session | `session_id` |
@@ -23,7 +24,7 @@ Deliberately absent: a second search tool (use the session-query package), raw e
 
 ## Delivery semantics
 
-- `session_send` accepts a message into the target Agent's inbox: `queue` starts the next turn, `steer` targets the nearest step of a running turn.
+- `session_queue_send` and `session_steer_send` deliver into the target Agent's inbox: queue hands over work for the target's next turn, steer redirects the turn it is running now. Queued messages are processed first-in-first-out in the order they were sent; the inbox splice that backs `followup` appends to the `next-turn` queue tail and each turn claims only its head, so ordering is the harness's own guarantee, not a queue this plugin keeps.
 - Acceptance is not completion. Use `session_wait` or `session_read` for the result.
 - A cold target is refused. Call `session_open` first, or `session_fork` to branch from it. The tool never wakes a cold Session implicitly.
 - The caller Session cannot be its own target.
@@ -40,7 +41,7 @@ Subagent Sessions are hidden from `session_list` unless `include_subagents` is t
 
 The animation is a direct port of the user's reference implementation (`.dsh/ref/deliver-flight/`: `envelope-flight.ts`, `overlay.ts`, `motion.ts`), hand-translated to this plugin's dependency-free browser module. It answers one question visually: **which Session sent to which Session**.
 
-On a successful `session_send`, an envelope flies along an arced trail **from the sending Session's sidebar row to the receiving Session's row** (1.5 s). The sender's row lights up at takeoff; the receiver's row lights up and rebounds at landing, so both rows are visible at the moment of arrival. A successful call reaches the page as a `tool/result` event, or as `tool/ptc-dispatch` when the model called it inside `run_code`; both carry `meta.relay = 'send'` and start the flight, and a failed call starts none.
+On a successful `session_queue_send` or `session_steer_send`, an envelope flies along an arced trail **from the sending Session's sidebar row to the receiving Session's row** (1.5 s). The sender's row lights up at takeoff; the receiver's row lights up and rebounds at landing, so both rows are visible at the moment of arrival. A successful call reaches the page as a `tool/result` event, or as `tool/ptc-dispatch` when the model called it inside `run_code`; both carry `meta.relay = 'send'` and start the flight, and a failed call starts none.
 
 The reference's geometry and timing are kept exactly: `FLIGHT_MS=1500`, `HOLD=0.24`, `ARRIVE=0.9`, 28 route steps; displacement, scale, and the traced line run in parallel on one shared offset; only the landing rebound hangs on `flight.finished`. The letter animation is `linear` because the route evaluates `easeInOut` internally; changing it would double-ease. While the letter is airborne the two row rects are re-read every frame and the whole route shifts by the midpoint delta (rows can be inserted or scroll), so the absolute keyframe coordinates stay valid; a single shared rAF loop drives all followers and stops with the last one.
 
@@ -65,7 +66,7 @@ The flight needs the sending Session open in the same browser page; it does not 
 | `maxWaitMs` | 120000 | Upper bound for `session_wait` |
 | `allowCrossWorkspace` | false | Address Sessions in another working directory |
 | `allowArchive` | false | Permit `session_archive` |
-| `allowSteer` | true | Permit `delivery: "steer"` |
+| `allowSteer` | true | Permit `session_steer_send` |
 
 ## Enable
 

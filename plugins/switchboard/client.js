@@ -1,7 +1,8 @@
 /**
  * Browser half of Switchboard: the row-to-row delivery animation.
  *
- * A watcher on the current Session reads successful `session_send` results,
+ * A watcher on the current Session reads successful `session_queue_send`
+ * and `session_steer_send` results,
  * then an envelope flies from the SENDING Session's sidebar row to the
  * RECEIVING Session's row — both rows are highlighted so each delivery shows
  * who sent to whom. Ported from the user's reference implementation
@@ -293,7 +294,7 @@ window.__ModuleLoader__.load({
     const RESULT_EVENT_TYPES = new Set(['tool/result', 'tool/ptc-dispatch'])
 
     /**
-     * Delivery metadata of one successful `session_send`, or undefined for any other event.
+     * Delivery metadata of one successful queue or steer send, or undefined for any other event.
      * @param event - one event from the current Session window.
      * @returns the send metadata, or undefined.
      */

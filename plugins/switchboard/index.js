@@ -31,7 +31,7 @@ export const Config = z.object({
   allowCrossWorkspace: z.boolean().default(false),
   /** Whether `session_archive` may change the archived set. Defaults to false. */
   allowArchive: z.boolean().default(false),
-  /** Whether `session_send` accepts `delivery: "steer"`. Defaults to true. */
+  /** Whether `session_steer_send` may redirect a running Session. Defaults to true. */
   allowSteer: z.boolean().default(true),
 })
 
@@ -45,9 +45,9 @@ const TEXT_OUTPUT = {
 const PROMPT_TEXT = [
   'Use the session_* tools only when the task needs another Session.',
   'session_list finds Sessions; session_read shows the messages of one Session.',
-  'session_send delivers one message to an already open Session; call session_open first for a cold Session.',
+  'session_queue_send hands new work to an open Session for after its current turn; session_steer_send redirects the turn it is running now. Call session_open first for a cold Session.',
   'session_wait only waits; it never sends or reads. session_create starts a blank Session; session_fork copies history from an existing Session.',
-  'A successful session_send acknowledges acceptance, not processing: read the result with session_wait or session_read.',
+  'A successful send acknowledges acceptance, not processing: read the result with session_wait or session_read.',
 ].join(' ')
 
 /** Fail with a message that tells the model which tool to call next. */
@@ -270,7 +270,59 @@ function dispatchMessage(caller, text) {
   })
 }
 
-/** Register the relay tools and their shared model guidance. */
+/**
+ * Validate, authorize, and deliver one message through the shared path behind
+ * both send tools. The caller-facing tool names decide the delivery mode; the
+ * per-mode refusals (steering disabled, steering an idle target) live here as
+ * error messages the model can learn from a failed call.
+ * @param ctx - plugin context carrying Session and Agent services.
+ * @param resolved - validated deployment configuration.
+ * @param receipts - idempotency receipt cache shared by both send tools.
+ * @param args - model arguments plus the fixed delivery mode.
+ * @param exec - tool execution context.
+ * @returns the delivery receipt.
+ */
+async function deliverMessage(ctx, resolved, receipts, args, exec) {
+  const caller = requireCaller(exec)
+  if (args.session_id === caller.id) {
+    fail('cannot send to the caller Session; answer in the current conversation instead')
+  }
+  const header = await loadHeader(ctx, args.session_id, exec.signal)
+  assertAuthorized(resolved, caller, header)
+  const target = liveAgent(ctx, args.session_id)
+  if (target === undefined) {
+    fail(`Session "${args.session_id}" is cold; call session_open first, or session_fork to branch from it`)
+  }
+  if (args.delivery === 'steer' && !resolved.allowSteer) {
+    fail('steering is disabled; call session_queue_send instead')
+  }
+  if (args.delivery === 'steer' && target.status !== 'running') {
+    fail(`Session "${args.session_id}" is idle and has nothing to steer; call session_queue_send instead`)
+  }
+  if (typeof args.content !== 'string' || args.content.trim().length === 0) {
+    fail('content must include non-whitespace text')
+  }
+  const key = args.request_id === undefined ? undefined : `${caller.id}:${args.request_id}`
+  if (key !== undefined && receipts.has(key)) return receipts.get(key)
+  const message = dispatchMessage(caller, args.content)
+  if (args.delivery === 'steer') target.steer(message)
+  else target.followup(message)
+  const receipt = {
+    from_session_id: caller.id,
+    session_id: args.session_id,
+    message_id: message.id,
+    delivery: args.delivery,
+    accepted: true,
+    target_status: target.status,
+  }
+  if (key !== undefined) {
+    receipts.set(key, receipt)
+    if (receipts.size > 1000) receipts.delete(receipts.keys().next().value)
+  }
+  return receipt
+}
+
+/** Register the switchboard tools and their shared model guidance. */
 export function apply(ctx, config) {
   const resolved = resolveConfig(config)
   /** Agent handles this plugin opened and must release on unload. */
@@ -430,12 +482,11 @@ export function apply(ctx, config) {
   }))
 
   ctx.tools.register(defineTool({
-    name: 'session_send',
-    description: 'Deliver one text message to an already resident Session. Call session_open first for a cold Session. Accepted delivery does not mean the target processed it; use session_wait or session_read for the result. This tool never sends to the caller Session.',
+    name: 'session_queue_send',
+    description: 'Queue one message for the target Session to handle after its current turn. Queued messages are processed in the order they were sent, so this hands over new work without interrupting what the target is doing now.',
     parameters: {
       session_id: { type: 'string', required: true, description: 'Target Session id from session_list.' },
       content: { type: 'string', required: true, description: 'Message text to deliver.' },
-      delivery: { type: 'string', enum: ['queue', 'steer'], description: 'queue (default) starts the next turn; steer targets the nearest step of a running turn.' },
       request_id: { type: 'string', description: 'Client-generated idempotency key. A repeated id returns the first receipt instead of sending again.' },
     },
     output: {
@@ -443,6 +494,7 @@ export function apply(ctx, config) {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
       presentationMeta: (_args, value) => ({
         relay: 'send',
+        delivery: 'queue',
         from_session_id: value.from_session_id,
         target_session_id: value.session_id,
         message_id: value.message_id,
@@ -450,50 +502,38 @@ export function apply(ctx, config) {
     },
     timeoutMs: 15_000,
     execute: async (args, exec) => {
-      const caller = requireCaller(exec)
-      if (args.session_id === caller.id) {
-        fail('cannot send to the caller Session; answer in the current conversation instead')
-      }
-      const header = await loadHeader(ctx, args.session_id, exec.signal)
-      assertAuthorized(resolved, caller, header)
-      const target = liveAgent(ctx, args.session_id)
-      if (target === undefined) {
-        fail(`Session "${args.session_id}" is cold; call session_open first, or session_fork to branch from it`)
-      }
-      const delivery = args.delivery ?? 'queue'
-      if (delivery === 'steer' && !resolved.allowSteer) {
-        fail('steer delivery is disabled; use delivery "queue"')
-      }
-      if (delivery === 'steer' && target.status !== 'running') {
-        fail(`Session "${args.session_id}" is idle; steer needs a running target, use delivery "queue"`)
-      }
-      if (typeof args.content !== 'string' || args.content.trim().length === 0) {
-        fail('content must include non-whitespace text')
-      }
-      const key = args.request_id === undefined ? undefined : `${caller.id}:${args.request_id}`
-      if (key !== undefined && receipts.has(key)) return receipts.get(key)
-      const message = dispatchMessage(caller, args.content)
-      if (delivery === 'steer') target.steer(message)
-      else target.followup(message)
-      const receipt = {
-        from_session_id: caller.id,
-        session_id: args.session_id,
-        message_id: message.id,
-        delivery,
-        accepted: true,
-        target_status: target.status,
-      }
-      if (key !== undefined) {
-        receipts.set(key, receipt)
-        if (receipts.size > 1000) receipts.delete(receipts.keys().next().value)
-      }
-      return receipt
+      return deliverMessage(ctx, resolved, receipts, { ...args, delivery: 'queue' }, exec)
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'session_steer_send',
+    description: 'Redirect the run a target Session already has in progress. The text is inserted at that Session next step boundary, so it changes what the current turn does next instead of adding work after it. Use it to correct a wrong direction, stop an unwanted action, or supply information the current turn needs. Steering can be discarded if that turn ends first.',
+    parameters: {
+      session_id: { type: 'string', required: true, description: 'Target Session id from session_list.' },
+      content: { type: 'string', required: true, description: 'Message text to deliver.' },
+      request_id: { type: 'string', description: 'Client-generated idempotency key. A repeated id returns the first receipt instead of sending again.' },
+    },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+      presentationMeta: (_args, value) => ({
+        relay: 'send',
+        delivery: 'steer',
+        from_session_id: value.from_session_id,
+        target_session_id: value.session_id,
+        message_id: value.message_id,
+      }),
+    },
+    timeoutMs: 15_000,
+    execute: async (args, exec) => {
+      return deliverMessage(ctx, resolved, receipts, { ...args, delivery: 'steer' }, exec)
     },
   }))
 
   ctx.tools.register(defineTool({
     name: 'session_wait',
-    description: 'Wait until one resident Session becomes idle, or until the timeout. It never sends, reads, or changes the target. Use it after session_send when you need the target to finish before acting.',
+    description: 'Wait until one resident Session becomes idle, or until the timeout. It never sends, reads, or changes the target. Use it after session_queue_send or session_steer_send when you need the target to finish before acting.',
     parameters: {
       session_id: { type: 'string', required: true, description: 'Target Session id from session_list.' },
       timeout_ms: { type: 'integer', description: 'Maximum wait in milliseconds. Defaults to 30000; bounded by maxWaitMs.' },
@@ -686,7 +726,7 @@ export function apply(ctx, config) {
     timeoutMs: 30_000,
     execute: async (args, exec) => {
       if (!resolved.allowArchive) {
-        fail('archiving is disabled; set allowArchive: true in the relay plugin config to enable it')
+        fail('archiving is disabled; set allowArchive: true in the switchboard plugin config to enable it')
       }
       const caller = requireCaller(exec)
       const header = await loadHeader(ctx, args.session_id, exec.signal)
