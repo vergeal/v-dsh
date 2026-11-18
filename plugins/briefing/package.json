@@ -1,9 +1,9 @@
 {
-  "name": "dsh-think-zh",
+  "name": "dsh-briefing",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Force Chinese thinking and a visible progress sentence on every model step.",
+  "description": "Chinese reasoning with a short progress briefing at key steps.",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
