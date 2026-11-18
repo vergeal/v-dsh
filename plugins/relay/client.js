@@ -1,5 +1,5 @@
 /**
- * Browser half of Switchboard: the row-to-row delivery animation.
+ * Browser half of Relay: the row-to-row delivery animation.
  *
  * A watcher on the current Session reads successful `session_queue_send`
  * and `session_steer_send` results,
@@ -10,7 +10,7 @@
  * see README for the port mapping and the undo-bin exclusion.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-switchboard',
+  id: 'dsh-relay',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -374,7 +374,7 @@ window.__ModuleLoader__.load({
         const Watch = makeWatcher(ctx)
         ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
           name: 'conversation.input.dock',
-          id: 'switchboard.watch',
+          id: 'relay.watch',
           order: 40,
         }, Watch))
       },

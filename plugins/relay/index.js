@@ -1,10 +1,10 @@
 /**
  * Relay: cross-session messaging for DeepSeek Harness.
  *
- * Host half of Switchboard. Registers the `session_*` tools that discover, read, activate,
+ * Host half of Relay. Registers the `session_*` tools that discover, read, activate,
  * message, create, fork, interrupt, rename, and archive Sessions. The browser
  * half (`client.js`) renders the paper-plane delivery effect.
- * @module dsh-switchboard
+ * @module dsh-relay
  */
 
 import { randomUUID } from 'node:crypto'
@@ -14,7 +14,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 
 /** Cordis plugin identity used by loader diagnostics. */
-export const name = 'switchboard'
+export const name = 'relay'
 
 /** Services required by the model-facing tools. */
 export const inject = ['tools', 'systemPrompt', 'sessions', 'agents']
@@ -322,7 +322,7 @@ async function deliverMessage(ctx, resolved, receipts, args, exec) {
   return receipt
 }
 
-/** Register the switchboard tools and their shared model guidance. */
+/** Register the relay tools and their shared model guidance. */
 export function apply(ctx, config) {
   const resolved = resolveConfig(config)
   /** Agent handles this plugin opened and must release on unload. */
@@ -726,7 +726,7 @@ export function apply(ctx, config) {
     timeoutMs: 30_000,
     execute: async (args, exec) => {
       if (!resolved.allowArchive) {
-        fail('archiving is disabled; set allowArchive: true in the switchboard plugin config to enable it')
+        fail('archiving is disabled; set allowArchive: true in the relay plugin config to enable it')
       }
       const caller = requireCaller(exec)
       const header = await loadHeader(ctx, args.session_id, exec.signal)

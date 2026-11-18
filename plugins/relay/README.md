@@ -1,4 +1,4 @@
-# Switchboard
+# Relay
 
 Cross-session messaging for DeepSeek Harness. The model can discover, read, activate, message, create, fork, interrupt, rename, and archive Sessions; the Web GUI flies an envelope from the sending Session's sidebar row to the receiving one when a message is sent.
 
@@ -74,8 +74,8 @@ Add the package to the profile and select its bundle:
 
 ```json
 {
-  "dependencies": { "dsh-switchboard": "link:/path/to/deepseek-harness/plugins/switchboard" },
-  "dsh": { "profile": { "bundles": ["...", "dsh-switchboard"] } }
+  "dependencies": { "dsh-relay": "link:/path/to/deepseek-harness/plugins/relay" },
+  "dsh": { "profile": { "bundles": ["...", "dsh-relay"] } }
 }
 ```
 
